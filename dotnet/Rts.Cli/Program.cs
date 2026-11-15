@@ -17,7 +17,7 @@ namespace Rts.Cli
             ulong seed = 0;
             for (int i = 1; i < args.Length; i++)
             {
-                if (args[i] == "--ticks" && i + 1 < args.Length && int.TryParse(args[i + 1], out ticks))
+                if (args[i] == "--ticks" && i + 1 < args.Length && int.TryParse(args[i + 1], out ticks) && ticks >= 0)
                     i++;
                 else if (args[i] == "--seed" && i + 1 < args.Length && ulong.TryParse(args[i + 1], out seed))
                     i++;
