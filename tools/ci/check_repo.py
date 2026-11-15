@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repository rules that the compiler cannot enforce. See docs/architecture.md §2.3 and §3."""
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -23,10 +24,10 @@ SIM_PATTERNS = [
 
 def tracked_files():
     out = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-        cwd=ROOT, check=True, capture_output=True, text=True,
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT, check=True, capture_output=True,
     ).stdout
-    return [line for line in out.splitlines() if line]
+    return [os.fsdecode(name) for name in out.split(b"\0") if name]
 
 
 def main():
