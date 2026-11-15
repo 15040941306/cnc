@@ -4,8 +4,8 @@
 
 ## 第一次创建
 
-1. 安装 Unity Hub 和 Unity 6.3 LTS（6000.3.x）。
-2. 先把本文件移到别处（Unity Hub 通常要求目标目录为空），在 Hub 里用 **Universal 2D** 模板新建工程，位置选仓库根目录，工程名填 `unity`。创建后把本文件放回来。
+1. 安装 Unity Hub 和 Unity 2022 LTS（2022.3.x）。在中国大陆和港澳，从 [unity.cn](https://unity.cn/releases) 下载中国版 Hub 和编辑器；Unity 6 及之后的版本在这些地区不提供。
+2. 先把本文件移到别处（Unity Hub 通常要求目标目录为空），在 Hub 里用 **2D (URP)** 模板新建工程（模板名称以 Hub 里显示的为准），位置选仓库根目录，工程名填 `unity`。创建后把本文件放回来。
 3. 在 `unity/Packages/manifest.json` 的 `dependencies` 里加一行：
    ```json
    "com.rts.core": "file:../../core",

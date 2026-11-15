@@ -3,6 +3,6 @@
   "version": "0.0.1",
   "displayName": "Rts Core",
   "description": "Engine-independent simulation core. No UnityEngine references.",
-  "unity": "6000.3",
+  "unity": "2022.3",
   "license": "MIT"
 }

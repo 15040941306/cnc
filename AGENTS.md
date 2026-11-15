@@ -33,7 +33,7 @@ pre-commit install                                                 # 克隆后�
 1. **资料来源**：只使用本仓库的 `docs/` 和代码。不要搜索、阅读或引用 OpenRA 及其模组、EA 公开的 C&C 源码、XCC 等工具的源码，也不要凭记忆复刻其他 RTS 开源项目的代码结构。
 2. **规格先行**：新增组件、系统或文件格式前，先在 `docs/specs/` 写规格（模板见 `docs/specs/README.md`），由人审核后再写代码。
 3. **一次只改一个模块**，每次提交不超过约 500 行，并附上测试。
-4. **`core/` 的代码必须能被 Unity 6.3 编译**：C# 9、.NET Standard 2.1，不使用 nullable 注解、file-scoped namespace、`record struct` 等更新的语法。
+4. **`core/` 的代码必须能被 Unity 2022 LTS 编译**：C# 9、.NET Standard 2.1，不使用 nullable 注解、file-scoped namespace、`record struct` 等更新的语法。
 5. **`core/` 禁止**：`UnityEngine` / `UnityEditor`；`System.Random`（用 `SimRandom`）；`DateTime.Now`、`Stopwatch` 等真实时间；遍历 `Dictionary` 或 `HashSet`；静态可变状态；多线程修改模拟状态。
 6. **模拟状态只用整数**。中间计算可以用浮点数，写回状态前取整。
 7. Unity 层不直接修改模拟状态，只提交命令；模拟层只输出状态和事件。
