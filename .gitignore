@@ -107,3 +107,36 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# ---- Project-specific ----
+# Unity project lives in unity/
+/unity/[Ll]ibrary/
+/unity/[Tt]emp/
+/unity/[Oo]bj/
+/unity/[Bb]uild/
+/unity/[Bb]uilds/
+/unity/[Ll]ogs/
+/unity/[Uu]ser[Ss]ettings/
+
+# Hand-written .NET projects (the Unity template above ignores generated *.csproj / *.sln)
+!/dotnet/**/*.csproj
+!/dotnet/*.slnx
+/dotnet/**/bin/
+/dotnet/**/obj/
+
+# Machine-local data: original-game path config, anything exported from original files
+/Local/
+user.local.json
+
+# Original-game file types must never be committed (also enforced by tools/ci/check_repo.py)
+*.mix
+*.shp
+*.vxl
+*.hva
+*.tmp
+*.pal
+*.csf
+*.aud
+*.bag
+*.idx
+*.bik
