@@ -1,0 +1,8 @@
+{
+  "name": "com.rts.core",
+  "version": "0.0.1",
+  "displayName": "Rts Core",
+  "description": "Engine-independent simulation core. No UnityEngine references.",
+  "unity": "6000.3",
+  "license": "MIT"
+}

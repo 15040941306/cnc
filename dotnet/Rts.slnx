@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Rts.Cli/Rts.Cli.csproj" />
+  <Project Path="Rts.Core.Math/Rts.Core.Math.csproj" />
+  <Project Path="Rts.Core.Sim/Rts.Core.Sim.csproj" />
+  <Project Path="Rts.Tests/Rts.Tests.csproj" />
+</Solution>

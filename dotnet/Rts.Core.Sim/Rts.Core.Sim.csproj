@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Mirrors core/Rts.Core.Sim/Rts.Core.Sim.asmdef. netstandard2.1 + C# 9 keeps this code compilable by Unity 6.3. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Rts.Core.Sim</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../core/Rts.Core.Sim/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Rts.Core.Math/Rts.Core.Math.csproj" />
+  </ItemGroup>
+
+</Project>

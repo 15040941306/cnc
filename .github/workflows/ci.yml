@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Repository rules
+        run: python3 tools/ci/check_repo.py
+      - name: Test
+        run: dotnet test dotnet/Rts.slnx
+      - name: Headless smoke run
+        run: dotnet run --project dotnet/Rts.Cli -- run --ticks 1000 --seed 1

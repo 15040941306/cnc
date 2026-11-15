@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-repo
+        name: repository rules (forbidden files, core dependency rules)
+        entry: python3 tools/ci/check_repo.py
+        language: system
+        pass_filenames: false
+        always_run: true
