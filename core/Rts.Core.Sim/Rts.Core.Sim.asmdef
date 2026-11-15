@@ -1,0 +1,7 @@
+{
+  "name": "Rts.Core.Sim",
+  "rootNamespace": "Rts.Core.Sim",
+  "references": ["Rts.Core.Math"],
+  "noEngineReferences": true,
+  "autoReferenced": false
+}
