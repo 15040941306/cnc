@@ -9,25 +9,37 @@ raw_assets/
 converted_assets/
 ra2_assets*.zip
 
-# Unity generated folders (when unity/ project is created via Unity Hub)
-unity/[Ll]ibrary/
-unity/[Tt]emp/
-unity/[Oo]bj/
-unity/[Bb]uild/
-unity/[Bb]uilds/
-unity/[Ll]ogs/
-unity/[Uu]ser[Ss]ettings/
-unity/[Mm]emoryCaptures/
-unity/*.csproj
-unity/*.sln
-unity/*.unityproj
-unity/*.pidb
-unity/*.booproj
-unity/*.svd
-unity/*.pdb
-unity/*.mdb
-unity/*.opendb
-unity/*.VC.db
+# Unity generated folders & IDE files (supports both unity/ and unity/<project>/)
+unity/**/[Ll]ibrary/
+unity/**/[Tt]emp/
+unity/**/[Oo]bj/
+unity/**/[Bb]uild/
+unity/**/[Bb]uilds/
+unity/**/[Ll]ogs/
+unity/**/[Uu]ser[Ss]ettings/
+unity/**/[Mm]emoryCaptures/
+unity/**/[Rr]ecordings/
+unity/**/.utmp/
+unity/**/.vs/
+unity/**/*.csproj
+unity/**/*.sln
+unity/**/*.unityproj
+unity/**/*.pidb
+unity/**/*.pidb.meta
+unity/**/*.booproj
+unity/**/*.svd
+unity/**/*.pdb
+unity/**/*.pdb.meta
+unity/**/*.mdb
+unity/**/*.mdb.meta
+unity/**/*.opendb
+unity/**/*.VC.db
+unity/**/sysinfo.txt
+unity/**/mono_crash.*
+unity/**/*.apk
+unity/**/*.aab
+unity/**/*.app
+
 
 # macOS / IDE
 .DS_Store
