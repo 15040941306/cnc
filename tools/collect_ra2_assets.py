@@ -2,9 +2,10 @@
 """
 collect_ra2_assets.py
 
-在安装有《红色警戒2》/《尤里的复仇》的电脑（如 Windows）上运行此脚本，
-自动扫描并收集移植所需的全部原版资源包（.mix、补丁包、字库 .csf、地图及外置规则 .ini），
-打包为单个 ZIP 压缩包并生成 manifest.json 校验清单，方便拷贝到开发机交由离线转换器解析。
+在安装有《红色警戒2》/《尤里的复仇》的电脑上运行此脚本，
+自动扫描并将移植所需的全部原版资源文件（.mix、补丁包、字库 .csf、地图及外置规则 .ini）
+直接按目录结构收集复制到项目的指定目录下（默认为项目根目录下的 raw_assets/），无需压缩，
+同时生成 manifest.json 校验清单供离线转换器直接读取。
 
 零第三方依赖，仅使用 Python 3 标准库。
 """
@@ -17,11 +18,13 @@ from datetime import datetime, timezone
 import fnmatch
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
+import shutil
 import sys
-import zipfile
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "raw_assets"
 
 CORE_REQUIRED_ANY = ("ra2.mix",)
 
@@ -199,7 +202,7 @@ def find_registry_ra2_dirs(candidates: list[Path]) -> None:
             continue
 
 
-def detect_game_dirs() -> list[Path]:
+def detect_game_dirs(exclude_dir: Path) -> list[Path]:
     candidates: list[Path] = [
         Path.cwd(),
         Path(__file__).resolve().parent,
@@ -222,6 +225,7 @@ def detect_game_dirs() -> list[Path]:
                 for rel in common_rel_paths:
                     candidates.append(drive_root / rel)
 
+    exclude_norm = str(exclude_dir.resolve()).lower()
     found: list[Path] = []
     seen: set[str] = set()
     for path in candidates:
@@ -230,7 +234,7 @@ def detect_game_dirs() -> list[Path]:
         except OSError:
             continue
         norm_key = str(resolved).lower()
-        if norm_key in seen:
+        if norm_key in seen or norm_key == exclude_norm:
             continue
         seen.add(norm_key)
         if is_valid_ra2_dir(resolved):
@@ -240,13 +244,13 @@ def detect_game_dirs() -> list[Path]:
 
 def scan_assets(
     game_dir: Path,
-    output_zip: Path,
+    output_dir: Path,
     include_music: bool,
     include_movies: bool,
     max_depth: int = 2,
 ) -> list[tuple[Path, str]]:
     results: list[tuple[Path, str]] = []
-    output_resolved = output_zip.resolve()
+    output_resolved = output_dir.resolve()
 
     def walk(current_dir: Path, depth: int) -> None:
         try:
@@ -257,13 +261,13 @@ def scan_assets(
         for entry in entries:
             if entry.is_symlink():
                 continue
+            if entry.resolve() == output_resolved:
+                continue
             if entry.is_dir():
                 if depth < max_depth and entry.name.lower() not in SKIP_SUBDIRS:
                     walk(entry, depth + 1)
                 continue
             if not entry.is_file():
-                continue
-            if entry.resolve() == output_resolved:
                 continue
 
             name_lower = entry.name.lower()
@@ -295,6 +299,23 @@ def compute_sha256(file_path: Path) -> str:
     return digest.hexdigest()
 
 
+def copy_with_sha256(src: Path, dst: Path, overwrite: bool) -> tuple[str, bool]:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not overwrite and dst.is_file():
+        src_stat = src.stat()
+        dst_stat = dst.stat()
+        if src_stat.st_size == dst_stat.st_size and abs(src_stat.st_mtime - dst_stat.st_mtime) < 1e-3:
+            return compute_sha256(dst), False
+
+    digest = hashlib.sha256()
+    with src.open("rb") as f_in, dst.open("wb") as f_out:
+        while chunk := f_in.read(4 * 1024 * 1024):
+            digest.update(chunk)
+            f_out.write(chunk)
+    shutil.copystat(src, dst)
+    return digest.hexdigest(), True
+
+
 def format_size(num_bytes: int) -> str:
     if num_bytes >= 1024 * 1024 * 1024:
         return f"{num_bytes / (1024 ** 3):.2f} GB"
@@ -305,38 +326,41 @@ def format_size(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
-def resolve_nested_ra2_dir(path: Path) -> Path | None:
-    if is_valid_ra2_dir(path):
+def resolve_nested_ra2_dir(path: Path, exclude_dir: Path) -> Path | None:
+    exclude_norm = str(exclude_dir.resolve()).lower()
+    if str(path.resolve()).lower() != exclude_norm and is_valid_ra2_dir(path):
         return path
     try:
         sub_matches = [
             sub.resolve()
             for sub in sorted(path.iterdir(), key=lambda p: p.name.lower())
-            if sub.is_dir() and is_valid_ra2_dir(sub)
+            if sub.is_dir()
+            and str(sub.resolve()).lower() != exclude_norm
+            and is_valid_ra2_dir(sub)
         ]
     except OSError:
         return None
     return sub_matches[0] if len(sub_matches) == 1 else None
 
 
-def resolve_game_dir_interactive(arg_game_dir: str | None, force: bool) -> Path:
+def resolve_game_dir_interactive(arg_game_dir: str | None, output_dir: Path, force: bool) -> Path:
     if arg_game_dir:
         cleaned = arg_game_dir.strip().strip('"').strip("'")
         game_dir = Path(cleaned).expanduser().resolve()
         if not game_dir.is_dir():
             raise SystemExit(f"[错误] 目录不存在: {game_dir}")
-        nested = resolve_nested_ra2_dir(game_dir)
+        nested = resolve_nested_ra2_dir(game_dir, output_dir)
         if nested is not None:
             if nested != game_dir:
                 print(f"[自动定位子目录] {nested}")
             return nested
         if not force:
             raise SystemExit(
-                f"[错误] 在目录中未找到 ra2.mix，请确认这是红警2安装目录（或加 --force 强制打包）: {game_dir}"
+                f"[错误] 在目录中未找到 ra2.mix，请确认这是红警2安装目录（或加 --force 强制收集）: {game_dir}"
             )
         return game_dir
 
-    detected = detect_game_dirs()
+    detected = detect_game_dirs(output_dir)
     if len(detected) == 1:
         print(f"[自动识别] 找到《红色警戒2》目录: {detected[0]}")
         return detected[0]
@@ -361,7 +385,7 @@ def resolve_game_dir_interactive(arg_game_dir: str | None, force: bool) -> Path:
     game_dir = Path(raw_input_path).expanduser().resolve()
     if not game_dir.is_dir():
         raise SystemExit(f"[错误] 目录不存在: {game_dir}")
-    nested = resolve_nested_ra2_dir(game_dir)
+    nested = resolve_nested_ra2_dir(game_dir, output_dir)
     if nested is not None:
         if nested != game_dir:
             print(f"[自动定位子目录] {nested}")
@@ -371,17 +395,20 @@ def resolve_game_dir_interactive(arg_game_dir: str | None, force: bool) -> Path:
     return game_dir
 
 
-def build_bundle(
+def collect_to_directory(
     game_dir: Path,
-    output_zip: Path,
+    output_dir: Path,
     include_music: bool,
     include_movies: bool,
-    compress: bool,
+    overwrite: bool,
     force: bool,
 ) -> None:
+    if game_dir.resolve() == output_dir.resolve():
+        raise SystemExit(f"[错误] 输出目录不能与游戏安装源目录相同: {output_dir}")
+
     scanned = scan_assets(
         game_dir=game_dir,
-        output_zip=output_zip,
+        output_dir=output_dir,
         include_music=include_music,
         include_movies=include_movies,
     )
@@ -394,72 +421,70 @@ def build_bundle(
     has_yuri = "ra2md.mix" in lower_rel_names
 
     if not has_base_ra2 and not force:
-        raise SystemExit("[错误] 缺少核心文件 ra2.mix，终止打包（如需强制继续请加 --force）。")
+        raise SystemExit("[错误] 缺少核心文件 ra2.mix，终止收集（如需强制继续请加 --force）。")
     if not has_language:
         print("[提示] 未发现 language.mix，语音和部分默认字库可能位于外置文件或其他目录。")
 
     total_raw_bytes = sum(p.stat().st_size for p, _ in scanned)
     edition_label = "红色警戒2 + 尤里的复仇" if has_yuri else "红色警戒2 原版"
     print(f"版本识别 : {edition_label}")
-    print(f"待收集数 : {len(scanned)} 个文件（原始总大小 {format_size(total_raw_bytes)}）")
-    print(f"输出路径 : {output_zip}")
+    print(f"待收集数 : {len(scanned)} 个文件（总大小 {format_size(total_raw_bytes)}）")
+    print(f"目标目录 : {output_dir}")
     print("-" * 60)
 
-    output_zip.parent.mkdir(parents=True, exist_ok=True)
-    compression_mode = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
-    compresslevel = 6 if compress else None
-
+    output_dir.mkdir(parents=True, exist_ok=True)
     manifest_files: list[CollectedFile] = []
+    copied_count = 0
+    skipped_count = 0
 
-    with zipfile.ZipFile(
-        output_zip,
-        mode="w",
-        compression=compression_mode,
-        compresslevel=compresslevel,
-        allowZip64=True,
-    ) as zf:
-        for index, (file_path, category) in enumerate(scanned, start=1):
-            rel_posix = file_path.relative_to(game_dir).as_posix()
-            size_bytes = file_path.stat().st_size
-            print(f"[{index}/{len(scanned)}] 打包 {rel_posix} ({format_size(size_bytes)}) [{category}]")
-            sha256_hex = compute_sha256(file_path)
-            arcname = f"raw_assets/{rel_posix}"
-            zf.write(file_path, arcname=arcname)
-            manifest_files.append(
-                CollectedFile(
-                    relative_path=rel_posix,
-                    category=category,
-                    size_bytes=size_bytes,
-                    sha256=sha256_hex,
-                )
+    for index, (file_path, category) in enumerate(scanned, start=1):
+        rel_path = file_path.relative_to(game_dir)
+        rel_posix = rel_path.as_posix()
+        size_bytes = file_path.stat().st_size
+        dst_path = output_dir / rel_path
+
+        sha256_hex, did_copy = copy_with_sha256(file_path, dst_path, overwrite=overwrite)
+        action_label = "复制" if did_copy else "跳过(未变)"
+        if did_copy:
+            copied_count += 1
+        else:
+            skipped_count += 1
+
+        print(f"[{index}/{len(scanned)}] {action_label} {rel_posix} ({format_size(size_bytes)}) [{category}]")
+        manifest_files.append(
+            CollectedFile(
+                relative_path=rel_posix,
+                category=category,
+                size_bytes=size_bytes,
+                sha256=sha256_hex,
             )
+        )
 
-        manifest = {
-            "schema_version": 1,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "detected_edition": "yuris_revenge" if has_yuri else "red_alert_2",
-            "has_base_ra2": has_base_ra2,
-            "has_language_mix": has_language,
-            "has_yuris_revenge": has_yuri,
-            "included_music": include_music,
-            "included_movies": include_movies,
-            "total_files": len(manifest_files),
-            "total_raw_bytes": total_raw_bytes,
-            "files": [asdict(item) for item in manifest_files],
-        }
-        zf.writestr("raw_assets/manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    manifest = {
+        "schema_version": 1,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "detected_edition": "yuris_revenge" if has_yuri else "red_alert_2",
+        "has_base_ra2": has_base_ra2,
+        "has_language_mix": has_language,
+        "has_yuris_revenge": has_yuri,
+        "included_music": include_music,
+        "included_movies": include_movies,
+        "total_files": len(manifest_files),
+        "total_raw_bytes": total_raw_bytes,
+        "files": [asdict(item) for item in manifest_files],
+    }
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    final_zip_size = output_zip.stat().st_size
     print("-" * 60)
-    print(f"[完成] 资源压缩包已生成: {output_zip}")
-    print(f"       包含文件: {len(manifest_files)} 个 + raw_assets/manifest.json")
-    print(f"       压缩包大小: {format_size(final_zip_size)} (原始 {format_size(total_raw_bytes)})")
-    print("       将此 ZIP 拷贝到 Mac 项目根目录后执行 unzip，文件将自动解压至 raw_assets/ 目录。")
+    print(f"[完成] 资源已收集至目录: {output_dir}")
+    print(f"       文件统计: 共 {len(manifest_files)} 个（新复制 {copied_count} 个，未变化跳过 {skipped_count} 个），总计 {format_size(total_raw_bytes)}")
+    print(f"       校验清单: {manifest_path}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="收集《红色警戒2》/《尤里的复仇》移植所需的资源文件并打包为单个 ZIP。"
+        description="收集《红色警戒2》/《尤里的复仇》移植所需的资源文件到项目指定目录。"
     )
     parser.add_argument(
         "-g",
@@ -468,9 +493,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "-o",
-        "--output",
-        default="ra2_assets_bundle.zip",
-        help="输出 ZIP 文件路径（默认: 当前目录下的 ra2_assets_bundle.zip）",
+        "--output-dir",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help=f"项目内输出目录路径（默认: {DEFAULT_OUTPUT_DIR}）",
     )
     parser.add_argument(
         "--no-music",
@@ -483,14 +508,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="包含过场真人电影包（movies*.mix / mov*.mix / *.bik，默认跳过以节省约 1GB 体积）",
     )
     parser.add_argument(
-        "--no-compress",
+        "--overwrite",
         action="store_true",
-        help="仅归档不压缩（ZIP_STORED），打包速度最快但文件略大",
+        help="强制覆盖目标目录中已存在的同名文件（默认对大小与修改时间一致的文件自动跳过）",
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="即使未检测到 ra2.mix 也强制打包匹配到的资源文件",
+        help="即使未检测到 ra2.mix 也强制收集匹配到的资源文件",
     )
     return parser.parse_args(argv)
 
@@ -499,14 +524,15 @@ def main() -> None:
     args = parse_args()
     is_double_click_win = sys.platform == "win32" and len(sys.argv) == 1 and sys.stdin.isatty()
     try:
-        game_dir = resolve_game_dir_interactive(args.game_dir, args.force)
-        output_zip = Path(args.output).expanduser().resolve()
-        build_bundle(
+        cleaned_out = args.output_dir.strip().strip('"').strip("'")
+        output_dir = Path(cleaned_out).expanduser().resolve()
+        game_dir = resolve_game_dir_interactive(args.game_dir, output_dir, args.force)
+        collect_to_directory(
             game_dir=game_dir,
-            output_zip=output_zip,
+            output_dir=output_dir,
             include_music=not args.no_music,
             include_movies=args.include_movies,
-            compress=not args.no_compress,
+            overwrite=args.overwrite,
             force=args.force,
         )
     except SystemExit as exc:
