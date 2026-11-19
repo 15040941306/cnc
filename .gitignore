@@ -1,0 +1,37 @@
+# .NET build artifacts
+artifacts/
+[Bb]in/
+[Oo]bj/
+TestResults/
+
+# Converted original game assets (keep proprietary RA2 assets out of git)
+raw_assets/
+converted_assets/
+ra2_assets*.zip
+
+# Unity generated folders (when unity/ project is created via Unity Hub)
+unity/[Ll]ibrary/
+unity/[Tt]emp/
+unity/[Oo]bj/
+unity/[Bb]uild/
+unity/[Bb]uilds/
+unity/[Ll]ogs/
+unity/[Uu]ser[Ss]ettings/
+unity/[Mm]emoryCaptures/
+unity/*.csproj
+unity/*.sln
+unity/*.unityproj
+unity/*.pidb
+unity/*.booproj
+unity/*.svd
+unity/*.pdb
+unity/*.mdb
+unity/*.opendb
+unity/*.VC.db
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.suo
+*.user

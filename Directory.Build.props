@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <ArtifactsRoot>$(MSBuildThisFileDirectory)artifacts\</ArtifactsRoot>
+    <BaseOutputPath>$(ArtifactsRoot)bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(ArtifactsRoot)obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>
