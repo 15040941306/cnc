@@ -46,9 +46,11 @@ namespace ReCnc.Unity.Editor
             var existing = AssetDatabase.LoadAssetAtPath<Ra2AssetRegistry>(RegistryAssetPath);
             bool hasOriginal = existing != null && existing.Models != null && existing.Models.Count > 0;
             bool hasRemastered = existing != null && existing.RemasteredModels != null && existing.RemasteredModels.Count > 0;
+            bool hasPbrTextures = existing != null && existing.PbrTextures != null && existing.PbrTextures.Count > 0;
             bool remasteredFilesOnDisk = Directory.Exists("Assets/_ReCncGenerated/RemasteredModels");
+            bool pbrTexOnDisk = Directory.Exists("Assets/_ReCncGenerated/RemasteredTextures");
 
-            if (hasOriginal && (hasRemastered || !remasteredFilesOnDisk))
+            if (hasOriginal && (hasRemastered || !remasteredFilesOnDisk) && (hasPbrTextures || !pbrTexOnDisk))
             {
                 return;
             }
@@ -256,10 +258,25 @@ namespace ReCnc.Unity.Editor
 
             registry.VoxelTeamShader = Shader.Find("ReCnc/Ra2VoxelTeamLit");
             registry.RemasteredModels.Clear();
+            registry.PbrTextures.Clear();
             registry.Models.Clear();
             registry.Sprites.Clear();
             registry.Cameos.Clear();
             registry.Audios.Clear();
+
+            // 0. Bind procedural high-res PBR Albedo + Normal texture maps
+            BindPbrSlot(registry, "Mat_BrushedSteel",    "tex_steel_plates.png",  "tex_steel_plates_n.png");
+            BindPbrSlot(registry, "Mat_CorrugatedSteel", "tex_corrugated.png",    "tex_corrugated_n.png");
+            BindPbrSlot(registry, "Mat_TeamPaint",       "tex_team_armor.png",    "tex_team_armor_n.png");
+            BindPbrSlot(registry, "Mat_DarkSteel",       "tex_dark_mech.png",     "tex_dark_mech_n.png");
+            BindPbrSlot(registry, "Mat_Concrete",        "tex_concrete.png",      "tex_concrete_n.png");
+            BindPbrSlot(registry, "Mat_SovietBrick",     "tex_soviet_brick.png",  "tex_soviet_brick_n.png");
+            BindPbrSlot(registry, "Mat_GoldBrass",       "tex_gold_fluted.png",   "tex_gold_fluted_n.png");
+            BindPbrSlot(registry, "Mat_HazardYellow",    "tex_hazard.png",        null);
+            BindPbrSlot(registry, "Mat_TreadRubber",     "tex_tread.png",         "tex_tread_n.png");
+            BindPbrSlot(registry, "Mat_SovietGate",      "tex_soviet_gate.png",   null);
+            BindPbrSlot(registry, "Mat_AlliedCrest",     "tex_allied_crest.png",  null);
+            BindPbrSlot(registry, "Mat_ShutterDoor",     "tex_shutter_door.png",  "tex_shutter_door_n.png");
 
             // 1. Bind all 28 Blender 3D Remastered FBX models
             string remManifestPath = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", "remastered_manifest.json");
@@ -353,6 +370,33 @@ namespace ReCnc.Unity.Editor
             EditorUtility.SetDirty(registry);
             AssetDatabase.SaveAssets();
             return registry;
+        }
+
+        private static void BindPbrSlot(Ra2AssetRegistry registry, string slotName, string albedoFile, string normalFile)
+        {
+            const string baseDir = "Assets/_ReCncGenerated/RemasteredTextures/";
+            var albedo = AssetDatabase.LoadAssetAtPath<Texture2D>(baseDir + albedoFile);
+            if (albedo == null) return;
+
+            Texture2D normal = null;
+            if (!string.IsNullOrEmpty(normalFile))
+            {
+                string normPath = baseDir + normalFile;
+                var imp = AssetImporter.GetAtPath(normPath) as TextureImporter;
+                if (imp != null && imp.textureType != TextureImporterType.NormalMap)
+                {
+                    imp.textureType = TextureImporterType.NormalMap;
+                    imp.SaveAndReimport();
+                }
+                normal = AssetDatabase.LoadAssetAtPath<Texture2D>(normPath);
+            }
+
+            registry.PbrTextures.Add(new PbrTexturePairEntry
+            {
+                MaterialSlotName = slotName,
+                AlbedoMap = albedo,
+                NormalMap = normal
+            });
         }
 
         private static Sprite LoadSprite(string assetPath)

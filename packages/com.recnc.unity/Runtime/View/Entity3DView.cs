@@ -71,7 +71,7 @@ namespace ReCnc.Unity.View
             GameObject remPrefab = registry != null ? registry.GetRemasteredModel(state.Def.Id) : null;
             if (remPrefab != null)
             {
-                BuildRemasteredHierarchy(remPrefab);
+                BuildRemasteredHierarchy(remPrefab, registry);
                 _hasRemastered = true;
             }
 
@@ -181,7 +181,7 @@ namespace ReCnc.Unity.View
             }
         }
 
-        private void BuildRemasteredHierarchy(GameObject fbxPrefab)
+        private void BuildRemasteredHierarchy(GameObject fbxPrefab, Ra2AssetRegistry registry)
         {
             _remasteredRoot = new GameObject("Remastered3D");
             _remasteredRoot.transform.SetParent(transform, false);
@@ -195,7 +195,6 @@ namespace ReCnc.Unity.View
             modelInst.transform.localRotation = Quaternion.identity;
             modelInst.transform.localScale = Vector3.one;
 
-            // Replace imported FBX placeholder materials with genuine URP PBR + Emissive + Team-Color materials!
             var renderers = modelInst.GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < renderers.Length; i++)
             {
@@ -209,7 +208,7 @@ namespace ReCnc.Unity.View
                 {
                     string slotName = srcMats[m] != null ? srcMats[m].name : "Mat_BrushedSteel";
                     bool isTeam;
-                    Material resolved = Ra2PbrMaterials.ResolveSlotMaterial(slotName, _teamColor, out isTeam);
+                    Material resolved = Ra2PbrMaterials.ResolveSlotMaterial(slotName, _teamColor, registry, out isTeam);
                     newMats[m] = resolved;
                     if (isTeam) _pbrTeamMaterials.Add(resolved);
                 }

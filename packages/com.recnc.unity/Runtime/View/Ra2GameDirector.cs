@@ -44,9 +44,19 @@ namespace ReCnc.Unity.View
 
         private void Start()
         {
+            // Bright hemisphere daylight ambient lighting so metallic silver & brass surfaces gleam like original RA2!
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = new Color(0.68f, 0.76f, 0.88f, 1f);
+            RenderSettings.ambientEquatorColor = new Color(0.50f, 0.54f, 0.60f, 1f);
+            RenderSettings.ambientGroundColor = new Color(0.32f, 0.34f, 0.30f, 1f);
+
             if (AssetRegistry == null)
             {
                 AssetRegistry = Resources.Load<Ra2AssetRegistry>("Ra2AssetRegistry");
+            }
+            if (AssetRegistry != null)
+            {
+                Ra2PbrMaterials.BindRegistryTextures(AssetRegistry);
             }
 
             Shader voxelShader = (AssetRegistry != null && AssetRegistry.VoxelTeamShader != null)

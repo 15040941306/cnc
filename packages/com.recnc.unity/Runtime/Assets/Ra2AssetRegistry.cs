@@ -12,6 +12,14 @@ namespace ReCnc.Unity.Assets
     }
 
     [Serializable]
+    public class PbrTexturePairEntry
+    {
+        public string MaterialSlotName;
+        public Texture2D AlbedoMap;
+        public Texture2D NormalMap;
+    }
+
+    [Serializable]
     public class VoxelModelAssetEntry
     {
         public string UnitId;
@@ -41,12 +49,14 @@ namespace ReCnc.Unity.Assets
     {
         public Shader VoxelTeamShader;
         public List<RemasteredModelAssetEntry> RemasteredModels = new List<RemasteredModelAssetEntry>();
+        public List<PbrTexturePairEntry> PbrTextures = new List<PbrTexturePairEntry>();
         public List<VoxelModelAssetEntry> Models = new List<VoxelModelAssetEntry>();
         public List<SpriteAssetEntry> Sprites = new List<SpriteAssetEntry>();
         public List<SpriteAssetEntry> Cameos = new List<SpriteAssetEntry>();
         public List<AudioAssetEntry> Audios = new List<AudioAssetEntry>();
 
         private Dictionary<string, GameObject> _remasteredMap;
+        private Dictionary<string, PbrTexturePairEntry> _pbrTexMap;
         private Dictionary<string, VoxelModelAssetEntry> _modelMap;
         private Dictionary<string, Sprite> _spriteMap;
         private Dictionary<string, Sprite> _cameoMap;
@@ -55,6 +65,7 @@ namespace ReCnc.Unity.Assets
         public void InvalidateCache()
         {
             _remasteredMap = null;
+            _pbrTexMap = null;
             _modelMap = null;
             _spriteMap = null;
             _cameoMap = null;
@@ -75,6 +86,16 @@ namespace ReCnc.Unity.Assets
                 }
             }
 
+            _pbrTexMap = new Dictionary<string, PbrTexturePairEntry>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < PbrTextures.Count; i++)
+            {
+                var t = PbrTextures[i];
+                if (!string.IsNullOrEmpty(t.MaterialSlotName))
+                {
+                    _pbrTexMap[t.MaterialSlotName] = t;
+                }
+            }
+
             _modelMap = new Dictionary<string, VoxelModelAssetEntry>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < Models.Count; i++)
             {
@@ -90,7 +111,7 @@ namespace ReCnc.Unity.Assets
             _cameoMap = new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < Cameos.Count; i++)
             {
-                if (!string.IsNullOrEmpty(Cameos[i].Id) && Cameos[i].Sprite != null) _cameoMap[Cameos[i].Id] = Cameos[i].Sprite;
+                if (!string.IsNullOrEmpty(Cameos[i].Id) && Sprites != null && Cameos[i].Sprite != null) _cameoMap[Cameos[i].Id] = Cameos[i].Sprite;
             }
 
             _audioMap = new Dictionary<string, AudioClip>(StringComparer.OrdinalIgnoreCase);
@@ -105,6 +126,13 @@ namespace ReCnc.Unity.Assets
             EnsureIndexed();
             GameObject prefab;
             return !string.IsNullOrEmpty(actorId) && _remasteredMap.TryGetValue(actorId, out prefab) ? prefab : null;
+        }
+
+        public PbrTexturePairEntry GetPbrTextures(string slotName)
+        {
+            EnsureIndexed();
+            PbrTexturePairEntry entry;
+            return !string.IsNullOrEmpty(slotName) && _pbrTexMap.TryGetValue(slotName, out entry) ? entry : null;
         }
 
         public VoxelModelAssetEntry GetModel(string unitId)

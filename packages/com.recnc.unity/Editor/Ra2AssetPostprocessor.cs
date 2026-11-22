@@ -22,7 +22,23 @@ namespace ReCnc.Unity.Editor
             if (!assetPath.StartsWith("Assets/_ReCncGenerated/")) return;
 
             var importer = (TextureImporter)assetImporter;
-            if (assetPath.EndsWith("palette_lut.png") || assetPath.EndsWith("unittem_lut.png"))
+            if (assetPath.Contains("/RemasteredTextures/"))
+            {
+                if (assetPath.EndsWith("_n.png"))
+                {
+                    importer.textureType = TextureImporterType.NormalMap;
+                }
+                else
+                {
+                    importer.textureType = TextureImporterType.Default;
+                    importer.sRGBTexture = true;
+                }
+                importer.wrapMode = TextureWrapMode.Repeat;
+                importer.filterMode = FilterMode.Trilinear;
+                importer.anisoLevel = 8;
+                importer.mipmapEnabled = true;
+            }
+            else if (assetPath.EndsWith("palette_lut.png") || assetPath.EndsWith("unittem_lut.png"))
             {
                 importer.textureType = TextureImporterType.Default;
                 importer.sRGBTexture = true;
