@@ -33,11 +33,6 @@ namespace ReCnc.Unity.View
 
         private void Awake()
         {
-            Shader voxelShader = (AssetRegistry != null && AssetRegistry.VoxelTeamShader != null)
-                ? AssetRegistry.VoxelTeamShader
-                : (Shader.Find("ReCnc/Ra2VoxelTeamLit") ?? Shader.Find("Universal Render Pipeline/Lit"));
-            _voxelTemplateMat = new Material(voxelShader);
-
             _shellMat = Terrain3DBuilder.CreateLitMaterial(new Color(1.0f, 0.78f, 0.25f), 0.8f);
             _laserMat = new Material(Shader.Find("Sprites/Default")) { color = new Color(0.45f, 0.92f, 1.0f, 0.95f) };
             _teslaMat = new Material(Shader.Find("Sprites/Default")) { color = new Color(0.75f, 0.85f, 1.0f, 1.0f) };
@@ -45,6 +40,19 @@ namespace ReCnc.Unity.View
             _evaAudioSource = gameObject.AddComponent<AudioSource>();
             _evaAudioSource.spatialBlend = 0f;
             _evaAudioSource.volume = 0.85f;
+        }
+
+        private void Start()
+        {
+            if (AssetRegistry == null)
+            {
+                AssetRegistry = Resources.Load<Ra2AssetRegistry>("Ra2AssetRegistry");
+            }
+
+            Shader voxelShader = (AssetRegistry != null && AssetRegistry.VoxelTeamShader != null)
+                ? AssetRegistry.VoxelTeamShader
+                : (Shader.Find("ReCnc/Ra2VoxelTeamLit") ?? Shader.Find("Universal Render Pipeline/Lit"));
+            _voxelTemplateMat = new Material(voxelShader);
 
             InitializeMatch();
         }

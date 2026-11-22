@@ -14,9 +14,8 @@ namespace ReCnc.Unity.Editor
 {
     public static class Ra2DemoSceneBuilder
     {
-        private const string RegistryAssetPath = "Assets/_ReCncGenerated/Ra2AssetRegistry.asset";
+        private const string RegistryAssetPath = "Assets/_ReCncGenerated/Resources/Ra2AssetRegistry.asset";
         private const string DemoScenePath = "Assets/Scenes/Ra2PlayableDemo.unity";
-
         private const string PendingBuildSessionKey = "ReCnc.PendingSceneBuildAfterExitPlayMode";
 
         [InitializeOnLoadMethod]
@@ -28,14 +27,58 @@ namespace ReCnc.Unity.Editor
 
         private static void OnPlayModeStateChanged(PlayModeStateChange state)
         {
-            if (state == PlayModeStateChange.EnteredEditMode && SessionState.GetBool(PendingBuildSessionKey, false))
+            // Automatically convert/bind assets right when pressing Play if not yet bound!
+            if (state == PlayModeStateChange.ExitingEditMode)
+            {
+                EnsureRegistryReadyBeforePlay();
+            }
+            else if (state == PlayModeStateChange.EnteredEditMode && SessionState.GetBool(PendingBuildSessionKey, false))
             {
                 SessionState.SetBool(PendingBuildSessionKey, false);
                 EditorApplication.delayCall += () =>
                 {
-                    ExecuteBuildSceneInEditMode(autoEnterPlayMode: true);
+                    ExecuteBuildSceneInEditMode(autoEnterPlayMode: true, interactiveDialog: false);
                 };
             }
+        }
+
+        private static void EnsureRegistryReadyBeforePlay()
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<Ra2AssetRegistry>(RegistryAssetPath);
+            if (existing != null && existing.Models != null && existing.Models.Count > 0)
+            {
+                return;
+            }
+
+            // If converted models are not on disk yet, check if raw_assets exists and auto-run converter
+            if (!Directory.Exists("Assets/_ReCncGenerated/Models"))
+            {
+                string repoRoot = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", ".."));
+                string ra2MixA = Path.Combine(repoRoot, "raw_assets", "ra2.mix");
+                string ra2MixB = Path.Combine(repoRoot, "raw_assets", "RA2.MIX");
+                if (File.Exists(ra2MixA) || File.Exists(ra2MixB))
+                {
+                    UnityEngine.Debug.Log("[ReCnc] 检测到 raw_assets 但尚未离线转换，正在自动调用 Ra2Converter...");
+                    TryInvokeConverterProcess();
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                }
+            }
+
+            if (Directory.Exists("Assets/_ReCncGenerated"))
+            {
+                BuildOrUpdateAssetRegistry();
+            }
+        }
+
+        public static void PrepareProjectForBatchMode()
+        {
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            if (Directory.Exists("Assets/_ReCncGenerated"))
+            {
+                AssetDatabase.ImportAsset("Assets/_ReCncGenerated", ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport);
+            }
+            var reg = BuildOrUpdateAssetRegistry();
+            UnityEngine.Debug.Log($"[ReCnc BatchVerify] Registry built: Models={reg.Models.Count}, Cameos={reg.Cameos.Count}, Sprites={reg.Sprites.Count}, Audios={reg.Audios.Count}");
         }
 
         [MenuItem("ReCnc/1. 一键装配资源并打开可玩 3D Demo 场景 (Build & Open 3D Demo)", priority = 10)]
@@ -49,14 +92,13 @@ namespace ReCnc.Unity.Editor
                 return;
             }
 
-            ExecuteBuildSceneInEditMode(autoEnterPlayMode: false);
+            ExecuteBuildSceneInEditMode(autoEnterPlayMode: false, interactiveDialog: true);
         }
 
-        private static void ExecuteBuildSceneInEditMode(bool autoEnterPlayMode)
+        private static void ExecuteBuildSceneInEditMode(bool autoEnterPlayMode, bool interactiveDialog)
         {
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-            // Force reimport of generated palette LUTs and sprites if needed so Point filter & Sprite settings apply
             if (Directory.Exists("Assets/_ReCncGenerated"))
             {
                 AssetDatabase.ImportAsset("Assets/_ReCncGenerated", ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport);
@@ -70,11 +112,11 @@ namespace ReCnc.Unity.Editor
             {
                 EditorApplication.isPlaying = true;
             }
-            else
+            else if (interactiveDialog)
             {
                 EditorUtility.DisplayDialog(
                     "ReCnc 3D Demo 已就绪",
-                    "已自动绑定所有转换后的 3D 载具模型、建造图标、立绘与音效，并打开场景 Ra2PlayableDemo.unity！\n\n现在直接点击顶部 ▶ Play 按钮即可开始试玩：\n• 选中盟军基地车，双击或按 [G] 展开建造厂\n• 右侧栏建造发电厂 -> 矿石精炼厂 -> 兵营 / 战车工厂\n• 按 [V] 可实时切换建筑的「原版立绘」与「纯3D白模」模式！",
+                    "已自动绑定所有转换后的 3D 载具模型、建造图标、立绘与音效，并打开场景 Ra2PlayableDemo.unity！\n\n现在直接点击顶部 ▶ Play 按钮即可开始试玩！",
                     "开始体验");
             }
         }
@@ -82,18 +124,42 @@ namespace ReCnc.Unity.Editor
         [MenuItem("ReCnc/2. 重新运行离线转换器 (Run Ra2Converter)", priority = 20)]
         public static void RunOfflineConverterFromEditor()
         {
+            if (TryInvokeConverterProcess())
+            {
+                BuildAndOpenPlayableDemoScene();
+            }
+        }
+
+        private static bool TryInvokeConverterProcess()
+        {
             string projectDir = Directory.GetCurrentDirectory();
             string repoRoot = Path.GetFullPath(Path.Combine(projectDir, "..", ".."));
             string converterProj = Path.Combine(repoRoot, "tools", "Ra2Converter", "Ra2Converter.csproj");
             if (!File.Exists(converterProj))
             {
                 UnityEngine.Debug.LogError("[ReCnc] 未找到 Ra2Converter.csproj: " + converterProj);
-                return;
+                return false;
+            }
+
+            string dotnetExe = "dotnet";
+            string[] candidates =
+            {
+                "/usr/local/share/dotnet/dotnet",
+                "/opt/homebrew/bin/dotnet",
+                @"C:\Program Files\dotnet\dotnet.exe"
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (File.Exists(candidates[i]))
+                {
+                    dotnetExe = candidates[i];
+                    break;
+                }
             }
 
             var psi = new ProcessStartInfo
             {
-                FileName = "/usr/local/share/dotnet/dotnet",
+                FileName = dotnetExe,
                 Arguments = "run --project \"" + converterProj + "\"",
                 WorkingDirectory = repoRoot,
                 RedirectStandardOutput = true,
@@ -101,23 +167,22 @@ namespace ReCnc.Unity.Editor
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            if (!File.Exists(psi.FileName)) psi.FileName = "dotnet";
 
             using (var proc = Process.Start(psi))
             {
+                if (proc == null) return false;
                 string stdout = proc.StandardOutput.ReadToEnd();
                 string stderr = proc.StandardError.ReadToEnd();
                 proc.WaitForExit();
                 UnityEngine.Debug.Log("[Ra2Converter]\n" + stdout);
                 if (!string.IsNullOrEmpty(stderr)) UnityEngine.Debug.LogWarning(stderr);
+                return proc.ExitCode == 0;
             }
-
-            BuildAndOpenPlayableDemoScene();
         }
 
         public static Ra2AssetRegistry BuildOrUpdateAssetRegistry()
         {
-            Directory.CreateDirectory("Assets/_ReCncGenerated");
+            Directory.CreateDirectory("Assets/_ReCncGenerated/Resources");
 
             var registry = AssetDatabase.LoadAssetAtPath<Ra2AssetRegistry>(RegistryAssetPath);
             if (registry == null)
@@ -206,7 +271,6 @@ namespace ReCnc.Unity.Editor
             Directory.CreateDirectory("Assets/Scenes");
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
-            // 1. Directional Sun Light with soft real-time shadows
             var lightGo = new GameObject("Directional Sun Light");
             var light = lightGo.AddComponent<Light>();
             light.type = LightType.Directional;
@@ -215,7 +279,6 @@ namespace ReCnc.Unity.Editor
             light.shadows = LightShadows.Soft;
             lightGo.transform.rotation = Quaternion.Euler(52f, -38f, 0f);
 
-            // 2. Main RTS 3D Camera
             var camGo = new GameObject("Main Camera");
             camGo.tag = "MainCamera";
             var cam = camGo.AddComponent<Camera>();
@@ -227,7 +290,6 @@ namespace ReCnc.Unity.Editor
             camGo.AddComponent<AudioListener>();
             camGo.AddComponent<RtsCamera3DController>();
 
-            // 3. Game Director & Input/HUD Controller
             var directorGo = new GameObject("Ra2GameDirector");
             var director = directorGo.AddComponent<Ra2GameDirector>();
             director.AssetRegistry = registry;
@@ -238,7 +300,6 @@ namespace ReCnc.Unity.Editor
 
             EditorSceneManager.SaveScene(scene, DemoScenePath);
 
-            // Register scene in Build Settings
             var existingScenes = new List<EditorBuildSettingsScene>(EditorBuildSettings.scenes);
             existingScenes.RemoveAll(s => s.path == DemoScenePath);
             existingScenes.Insert(0, new EditorBuildSettingsScene(DemoScenePath, true));
