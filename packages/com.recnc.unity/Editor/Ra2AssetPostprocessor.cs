@@ -5,6 +5,18 @@ namespace ReCnc.Unity.Editor
 {
     public class Ra2AssetPostprocessor : AssetPostprocessor
     {
+        private void OnPreprocessModel()
+        {
+            if (!assetPath.StartsWith("Assets/_ReCncGenerated/RemasteredModels/")) return;
+
+            var modelImporter = (ModelImporter)assetImporter;
+            modelImporter.importCameras = false;
+            modelImporter.importLights = false;
+            modelImporter.importAnimation = false;
+            modelImporter.animationType = ModelImporterAnimationType.None;
+            modelImporter.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+        }
+
         private void OnPreprocessTexture()
         {
             if (!assetPath.StartsWith("Assets/_ReCncGenerated/")) return;

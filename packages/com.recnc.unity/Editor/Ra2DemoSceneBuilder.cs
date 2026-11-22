@@ -27,7 +27,6 @@ namespace ReCnc.Unity.Editor
 
         private static void OnPlayModeStateChanged(PlayModeStateChange state)
         {
-            // Automatically convert/bind assets right when pressing Play if not yet bound!
             if (state == PlayModeStateChange.ExitingEditMode)
             {
                 EnsureRegistryReadyBeforePlay();
@@ -45,12 +44,15 @@ namespace ReCnc.Unity.Editor
         private static void EnsureRegistryReadyBeforePlay()
         {
             var existing = AssetDatabase.LoadAssetAtPath<Ra2AssetRegistry>(RegistryAssetPath);
-            if (existing != null && existing.Models != null && existing.Models.Count > 0)
+            bool hasOriginal = existing != null && existing.Models != null && existing.Models.Count > 0;
+            bool hasRemastered = existing != null && existing.RemasteredModels != null && existing.RemasteredModels.Count > 0;
+            bool remasteredFilesOnDisk = Directory.Exists("Assets/_ReCncGenerated/RemasteredModels");
+
+            if (hasOriginal && (hasRemastered || !remasteredFilesOnDisk))
             {
                 return;
             }
 
-            // If converted models are not on disk yet, check if raw_assets exists and auto-run converter
             if (!Directory.Exists("Assets/_ReCncGenerated/Models"))
             {
                 string repoRoot = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", ".."));
@@ -60,10 +62,15 @@ namespace ReCnc.Unity.Editor
                 {
                     UnityEngine.Debug.Log("[ReCnc] 检测到 raw_assets 但尚未离线转换，正在自动调用 Ra2Converter...");
                     TryInvokeConverterProcess();
-                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 }
             }
 
+            if (!Directory.Exists("Assets/_ReCncGenerated/RemasteredModels"))
+            {
+                TryInvokeBlenderRemasterProcess();
+            }
+
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             if (Directory.Exists("Assets/_ReCncGenerated"))
             {
                 BuildOrUpdateAssetRegistry();
@@ -78,7 +85,7 @@ namespace ReCnc.Unity.Editor
                 AssetDatabase.ImportAsset("Assets/_ReCncGenerated", ImportAssetOptions.ImportRecursive | ImportAssetOptions.ForceSynchronousImport);
             }
             var reg = BuildOrUpdateAssetRegistry();
-            UnityEngine.Debug.Log($"[ReCnc BatchVerify] Registry built: Models={reg.Models.Count}, Cameos={reg.Cameos.Count}, Sprites={reg.Sprites.Count}, Audios={reg.Audios.Count}");
+            UnityEngine.Debug.Log($"[ReCnc BatchVerify] Remastered={reg.RemasteredModels.Count}, VXL={reg.Models.Count}, Cameos={reg.Cameos.Count}, Sprites={reg.Sprites.Count}, Audios={reg.Audios.Count}");
         }
 
         [MenuItem("ReCnc/1. 一键装配资源并打开可玩 3D Demo 场景 (Build & Open 3D Demo)", priority = 10)]
@@ -107,7 +114,7 @@ namespace ReCnc.Unity.Editor
             var registry = BuildOrUpdateAssetRegistry();
             CreateDemoScene(registry);
 
-            UnityEngine.Debug.Log("[ReCnc] 红警2 3D 可玩 Demo 场景装配完成！");
+            UnityEngine.Debug.Log($"[ReCnc] 3D Demo 场景装配完成（已绑定 {registry.RemasteredModels.Count} 套 Blender 3D 翻新精模）！");
             if (autoEnterPlayMode)
             {
                 EditorApplication.isPlaying = true;
@@ -115,8 +122,8 @@ namespace ReCnc.Unity.Editor
             else if (interactiveDialog)
             {
                 EditorUtility.DisplayDialog(
-                    "ReCnc 3D Demo 已就绪",
-                    "已自动绑定所有转换后的 3D 载具模型、建造图标、立绘与音效，并打开场景 Ra2PlayableDemo.unity！\n\n现在直接点击顶部 ▶ Play 按钮即可开始试玩！",
+                    "ReCnc 3D 翻新精模已就绪",
+                    $"已自动绑定 {registry.RemasteredModels.Count} 套 Blender 3D 翻新精模、{registry.Cameos.Count} 个建造图标与音效，并打开场景 Ra2PlayableDemo.unity！\n\n点击顶部 ▶ Play 即可体验（按 [V] 可实时对比切换「Blender 3D翻新精模」与「原版复古模式」）！",
                     "开始体验");
             }
         }
@@ -127,6 +134,62 @@ namespace ReCnc.Unity.Editor
             if (TryInvokeConverterProcess())
             {
                 BuildAndOpenPlayableDemoScene();
+            }
+        }
+
+        [MenuItem("ReCnc/3. 重新生成 Blender 3D 翻新精模 (Rebuild Blender 3D Models)", priority = 30)]
+        public static void RunBlenderRemasterFromEditor()
+        {
+            if (TryInvokeBlenderRemasterProcess())
+            {
+                BuildAndOpenPlayableDemoScene();
+            }
+        }
+
+        private static bool TryInvokeBlenderRemasterProcess()
+        {
+            string projectDir = Directory.GetCurrentDirectory();
+            string repoRoot = Path.GetFullPath(Path.Combine(projectDir, "..", ".."));
+            string scriptPath = Path.Combine(repoRoot, "tools", "blender_remaster", "build_all_models.py");
+            if (!File.Exists(scriptPath)) return false;
+
+            string blenderExe = null;
+            string[] candidates =
+            {
+                "/Applications/Blender.app/Contents/MacOS/Blender",
+                @"C:\Program Files\Blender Foundation\Blender 5.3\blender.exe",
+                @"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (File.Exists(candidates[i]))
+                {
+                    blenderExe = candidates[i];
+                    break;
+                }
+            }
+            if (string.IsNullOrEmpty(blenderExe)) return false;
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = blenderExe,
+                Arguments = "--background --factory-startup --python \"" + scriptPath + "\"",
+                WorkingDirectory = repoRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using (var proc = Process.Start(psi))
+            {
+                if (proc == null) return false;
+                string stdout = proc.StandardOutput.ReadToEnd();
+                string stderr = proc.StandardError.ReadToEnd();
+                proc.WaitForExit();
+                UnityEngine.Debug.Log("[Blender Remaster]\n" + stdout);
+                if (!string.IsNullOrEmpty(stderr)) UnityEngine.Debug.LogWarning(stderr);
+                return proc.ExitCode == 0;
             }
         }
 
@@ -192,11 +255,53 @@ namespace ReCnc.Unity.Editor
             }
 
             registry.VoxelTeamShader = Shader.Find("ReCnc/Ra2VoxelTeamLit");
+            registry.RemasteredModels.Clear();
             registry.Models.Clear();
             registry.Sprites.Clear();
             registry.Cameos.Clear();
             registry.Audios.Clear();
 
+            // 1. Bind all 28 Blender 3D Remastered FBX models
+            string remManifestPath = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", "remastered_manifest.json");
+            if (File.Exists(remManifestPath))
+            {
+                var remManifest = JsonUtility.FromJson<RemasteredManifestData>(File.ReadAllText(remManifestPath));
+                if (remManifest != null && remManifest.Models != null)
+                {
+                    for (int i = 0; i < remManifest.Models.Count; i++)
+                    {
+                        var rm = remManifest.Models[i];
+                        var fbxGo = !string.IsNullOrEmpty(rm.FbxAssetPath) ? AssetDatabase.LoadAssetAtPath<GameObject>(rm.FbxAssetPath) : null;
+                        if (fbxGo != null)
+                        {
+                            registry.RemasteredModels.Add(new RemasteredModelAssetEntry
+                            {
+                                ActorId = rm.ActorId,
+                                FbxPrefab = fbxGo
+                            });
+                        }
+                    }
+                }
+            }
+            else if (Directory.Exists("Assets/_ReCncGenerated/RemasteredModels"))
+            {
+                string[] fbxFiles = Directory.GetFiles("Assets/_ReCncGenerated/RemasteredModels", "*.fbx");
+                for (int i = 0; i < fbxFiles.Length; i++)
+                {
+                    string assetPath = fbxFiles[i].Replace('\\', '/');
+                    var fbxGo = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                    if (fbxGo != null)
+                    {
+                        registry.RemasteredModels.Add(new RemasteredModelAssetEntry
+                        {
+                            ActorId = Path.GetFileNameWithoutExtension(assetPath),
+                            FbxPrefab = fbxGo
+                        });
+                    }
+                }
+            }
+
+            // 2. Bind converted original RA2 VXL, Sprites, Cameos & Audio
             string manifestPath = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", "asset_manifest.json");
             if (File.Exists(manifestPath))
             {
@@ -244,6 +349,7 @@ namespace ReCnc.Unity.Editor
                 }
             }
 
+            registry.InvalidateCache();
             EditorUtility.SetDirty(registry);
             AssetDatabase.SaveAssets();
             return registry;

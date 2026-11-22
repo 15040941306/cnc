@@ -5,6 +5,13 @@ using UnityEngine;
 namespace ReCnc.Unity.Assets
 {
     [Serializable]
+    public class RemasteredModelAssetEntry
+    {
+        public string ActorId;
+        public GameObject FbxPrefab;
+    }
+
+    [Serializable]
     public class VoxelModelAssetEntry
     {
         public string UnitId;
@@ -33,19 +40,41 @@ namespace ReCnc.Unity.Assets
     public class Ra2AssetRegistry : ScriptableObject
     {
         public Shader VoxelTeamShader;
+        public List<RemasteredModelAssetEntry> RemasteredModels = new List<RemasteredModelAssetEntry>();
         public List<VoxelModelAssetEntry> Models = new List<VoxelModelAssetEntry>();
         public List<SpriteAssetEntry> Sprites = new List<SpriteAssetEntry>();
         public List<SpriteAssetEntry> Cameos = new List<SpriteAssetEntry>();
         public List<AudioAssetEntry> Audios = new List<AudioAssetEntry>();
 
+        private Dictionary<string, GameObject> _remasteredMap;
         private Dictionary<string, VoxelModelAssetEntry> _modelMap;
         private Dictionary<string, Sprite> _spriteMap;
         private Dictionary<string, Sprite> _cameoMap;
         private Dictionary<string, AudioClip> _audioMap;
 
+        public void InvalidateCache()
+        {
+            _remasteredMap = null;
+            _modelMap = null;
+            _spriteMap = null;
+            _cameoMap = null;
+            _audioMap = null;
+        }
+
         public void EnsureIndexed()
         {
             if (_modelMap != null) return;
+
+            _remasteredMap = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < RemasteredModels.Count; i++)
+            {
+                var r = RemasteredModels[i];
+                if (!string.IsNullOrEmpty(r.ActorId) && r.FbxPrefab != null)
+                {
+                    _remasteredMap[r.ActorId] = r.FbxPrefab;
+                }
+            }
+
             _modelMap = new Dictionary<string, VoxelModelAssetEntry>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < Models.Count; i++)
             {
@@ -69,6 +98,13 @@ namespace ReCnc.Unity.Assets
             {
                 if (!string.IsNullOrEmpty(Audios[i].Id) && Audios[i].Clip != null) _audioMap[Audios[i].Id] = Audios[i].Clip;
             }
+        }
+
+        public GameObject GetRemasteredModel(string actorId)
+        {
+            EnsureIndexed();
+            GameObject prefab;
+            return !string.IsNullOrEmpty(actorId) && _remasteredMap.TryGetValue(actorId, out prefab) ? prefab : null;
         }
 
         public VoxelModelAssetEntry GetModel(string unitId)

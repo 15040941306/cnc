@@ -107,7 +107,7 @@ namespace ReCnc.Unity.View
             Pure3DStructuresMode = !Pure3DStructuresMode;
             foreach (var kv in _entityViews)
             {
-                if (kv.Value != null) kv.Value.SetPure3DMode(Pure3DStructuresMode);
+                if (kv.Value != null) kv.Value.SetLegacyVisualMode(Pure3DStructuresMode);
             }
         }
 

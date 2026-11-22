@@ -120,6 +120,20 @@ namespace ReCnc.Core.Data
         public int SampleRate;
     }
 
+    [Serializable]
+    public class RemasteredManifestData
+    {
+        public int SchemaVersion = 1;
+        public List<RemasteredModelRecord> Models = new List<RemasteredModelRecord>();
+    }
+
+    [Serializable]
+    public class RemasteredModelRecord
+    {
+        public string ActorId;
+        public string FbxAssetPath;
+    }
+
     public class RulesCatalog
     {
         private readonly Dictionary<string, ActorDefData> _actors = new Dictionary<string, ActorDefData>(StringComparer.OrdinalIgnoreCase);

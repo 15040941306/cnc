@@ -43,9 +43,12 @@ unity/**/*.aab
 unity/**/*.app
 
 
-# macOS / IDE
+# macOS / IDE / Python
 .DS_Store
 .idea/
 .vscode/
 *.suo
 *.user
+__pycache__/
+*.py[cod]
+

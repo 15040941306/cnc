@@ -353,16 +353,26 @@ namespace ReCnc.Unity.InputControl
             _placingBuildingDef = def;
 
             _placementGhost = new GameObject("BuildingPlacementGhost");
-            float wx = def.FootprintX * WorldCoords.CellSize * 0.94f;
-            float wz = def.FootprintY * WorldCoords.CellSize * 0.94f;
-            float wy = Mathf.Max(1.2f, def.Height);
+            GameObject remPrefab = Director.AssetRegistry != null ? Director.AssetRegistry.GetRemasteredModel(def.Id) : null;
+            if (remPrefab != null)
+            {
+                var inst = Instantiate(remPrefab, _placementGhost.transform, false);
+                var cols = inst.GetComponentsInChildren<Collider>(true);
+                for (int i = 0; i < cols.Length; i++) Destroy(cols[i]);
+            }
+            else
+            {
+                float wx = def.FootprintX * WorldCoords.CellSize * 0.94f;
+                float wz = def.FootprintY * WorldCoords.CellSize * 0.94f;
+                float wy = Mathf.Max(1.2f, def.Height);
 
-            var box = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            Destroy(box.GetComponent<Collider>());
-            box.transform.SetParent(_placementGhost.transform, false);
-            box.transform.localPosition = new Vector3(0f, wy * 0.5f, 0f);
-            box.transform.localScale = new Vector3(wx, wy, wz);
-            _placementGhostRenderers = _placementGhost.GetComponentsInChildren<Renderer>();
+                var box = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                Destroy(box.GetComponent<Collider>());
+                box.transform.SetParent(_placementGhost.transform, false);
+                box.transform.localPosition = new Vector3(0f, wy * 0.5f, 0f);
+                box.transform.localScale = new Vector3(wx, wy, wz);
+            }
+            _placementGhostRenderers = _placementGhost.GetComponentsInChildren<Renderer>(true);
         }
 
         private void ExitPlacementMode()
@@ -549,8 +559,8 @@ namespace ReCnc.Unity.InputControl
             GUILayout.Label("红色警戒2 Unity 全3D重制原型", _headerStyle);
             GUILayout.Label("镜头: WASD平移 | 滚轮缩放 | Q/E或Alt+中键旋转 | H回基地", _smallStyle);
             GUILayout.Label("操作: 左键点选/框选 | 双击基地车(或按G)展开 | 右键移动/攻击/采矿", _smallStyle);
-            string modeLabel = Director.Pure3DStructuresMode ? "纯3D几何白模" : "3D基座+原版立绘";
-            if (GUILayout.Button("[V] 切换建筑/步兵外观 (当前: " + modeLabel + ")", _tabBtnStyle, GUILayout.Height(22f)))
+            string modeLabel = Director.Pure3DStructuresMode ? "原版复古模式(VXL+立绘)" : "Blender 3D翻新精模(PBR)";
+            if (GUILayout.Button("[V] 切换画质模式 (当前: " + modeLabel + ")", _tabBtnStyle, GUILayout.Height(22f)))
             {
                 Director.ToggleStructureVisualMode();
             }
