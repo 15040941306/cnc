@@ -1,0 +1,12 @@
+{
+  "name": "com.recnc.unity",
+  "version": "0.1.0",
+  "displayName": "ReCnc Unity 3D Presentation",
+  "description": "3D URP presentation, RTS camera, HUD, shader, and offline asset importer for Red Alert 2 remake.",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.recnc.core": "0.1.0",
+    "com.unity.render-pipelines.universal": "14.0.12",
+    "com.unity.ugui": "1.0.0"
+  }
+}

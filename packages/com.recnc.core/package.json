@@ -1,0 +1,7 @@
+{
+  "name": "com.recnc.core",
+  "version": "0.1.0",
+  "displayName": "ReCnc Core RTS Simulation",
+  "description": "Engine-agnostic C# RTS core simulation and data models for Red Alert 2 Unity remake.",
+  "unity": "2022.3"
+}

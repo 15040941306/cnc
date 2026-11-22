@@ -8,6 +8,8 @@ TestResults/
 raw_assets/
 converted_assets/
 ra2_assets*.zip
+unity/**/Assets/StreamingAssets/Ra2Converted*
+unity/**/Assets/_ReCncGenerated*
 
 # Unity generated folders & IDE files (supports both unity/ and unity/<project>/)
 unity/**/[Ll]ibrary/

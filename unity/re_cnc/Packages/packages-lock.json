@@ -1,5 +1,21 @@
 {
   "dependencies": {
+    "com.recnc.core": {
+      "version": "file:../../../packages/com.recnc.core",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
+    },
+    "com.recnc.unity": {
+      "version": "file:../../../packages/com.recnc.unity",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {
+        "com.recnc.core": "0.1.0",
+        "com.unity.render-pipelines.universal": "14.0.12",
+        "com.unity.ugui": "1.0.0"
+      }
+    },
     "com.unity.burst": {
       "version": "1.8.21",
       "depth": 1,
