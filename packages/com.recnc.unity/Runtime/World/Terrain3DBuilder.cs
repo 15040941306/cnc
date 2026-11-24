@@ -102,7 +102,7 @@ namespace ReCnc.Unity.World
                             if (c.Terrain == TerrainKind.Water) hasWater = true;
                             if (c.Terrain == TerrainKind.Rock) touchesRock = true;
 
-                            float cellH = c.Terrain == TerrainKind.Water ? 0.65f : c.HeightLevel;
+                            float cellH = c.Terrain == TerrainKind.Water ? -0.25f : c.HeightLevel;
                             sum += cellH * WorldCoords.HeightStep;
                             cnt++;
                             if (c.HeightLevel < minLvl) minLvl = c.HeightLevel;
@@ -211,20 +211,49 @@ namespace ReCnc.Unity.World
             mr.receiveShadows = true;
             terrainGo.AddComponent<MeshCollider>().sharedMesh = mesh;
 
-            // 3. Animated Rippling Water Surface
+            // 3. Localized Water Mesh generated ONLY over actual Water cells (never floods low-elevation land!)
             if (hasWater)
             {
-                var waterGo = GameObject.CreatePrimitive(PrimitiveType.Quad);
-                waterGo.name = "RiverWaterSurface";
-                Destroy(waterGo.GetComponent<Collider>());
-                waterGo.transform.SetParent(transform, false);
-                waterGo.transform.position = new Vector3(
-                    map.Width * WorldCoords.CellSize * 0.5f,
-                    1.28f * WorldCoords.HeightStep,
-                    map.Height * WorldCoords.CellSize * 0.5f);
-                waterGo.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
-                waterGo.transform.localScale = new Vector3(map.Width * WorldCoords.CellSize, map.Height * WorldCoords.CellSize, 1f);
-                waterGo.GetComponent<MeshRenderer>().sharedMaterial = CreateWaterMaterial(map.Theater);
+                var wVerts = new List<Vector3>();
+                var wTris = new List<int>();
+                float waterY = 0.68f * WorldCoords.HeightStep;
+                const float shoreOverlap = 0.85f; // Tucks water surface cleanly into sloped shoreline bank
+
+                for (int y = 0; y < map.Height; y++)
+                {
+                    for (int x = 0; x < map.Width; x++)
+                    {
+                        var c = map.GetCell(x, y);
+                        if (c == null || c.Terrain != TerrainKind.Water) continue;
+
+                        float x0 = x * WorldCoords.CellSize - (x > 0 && map.GetCell(x - 1, y).Terrain != TerrainKind.Water ? shoreOverlap : 0f);
+                        float x1 = (x + 1) * WorldCoords.CellSize + (x + 1 < map.Width && map.GetCell(x + 1, y).Terrain != TerrainKind.Water ? shoreOverlap : 0f);
+                        float z0 = y * WorldCoords.CellSize - (y > 0 && map.GetCell(x, y - 1).Terrain != TerrainKind.Water ? shoreOverlap : 0f);
+                        float z1 = (y + 1) * WorldCoords.CellSize + (y + 1 < map.Height && map.GetCell(x, y + 1).Terrain != TerrainKind.Water ? shoreOverlap : 0f);
+
+                        int baseIdx = wVerts.Count;
+                        wVerts.Add(new Vector3(x0, waterY, z0));
+                        wVerts.Add(new Vector3(x0, waterY, z1));
+                        wVerts.Add(new Vector3(x1, waterY, z1));
+                        wVerts.Add(new Vector3(x1, waterY, z0));
+                        wTris.Add(baseIdx); wTris.Add(baseIdx + 1); wTris.Add(baseIdx + 2);
+                        wTris.Add(baseIdx); wTris.Add(baseIdx + 2); wTris.Add(baseIdx + 3);
+                    }
+                }
+
+                if (wVerts.Count > 0)
+                {
+                    var wMesh = new Mesh { name = "Ra2WaterMesh", indexFormat = IndexFormat.UInt32 };
+                    wMesh.SetVertices(wVerts);
+                    wMesh.SetTriangles(wTris, 0);
+                    wMesh.RecalculateNormals();
+                    wMesh.RecalculateBounds();
+
+                    var waterGo = new GameObject("RiverWaterSurface");
+                    waterGo.transform.SetParent(transform, false);
+                    waterGo.AddComponent<MeshFilter>().sharedMesh = wMesh;
+                    waterGo.AddComponent<MeshRenderer>().sharedMaterial = CreateWaterMaterial(map.Theater);
+                }
             }
 
             _goldOreMat = CreateLitMaterial(new Color(0.96f, 0.76f, 0.16f, 1f), 0.78f);
