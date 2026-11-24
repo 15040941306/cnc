@@ -34,13 +34,14 @@ namespace ReCnc.Core.Simulation
             Map = new GridMap(mapBundle);
         }
 
-        public static GameSimulation CreateStandardSkirmish(RulesCatalog rules, MapBundleData mapData, string playerSide = "Allied")
+        public static GameSimulation CreateStandardSkirmish(RulesCatalog rules, MapBundleData mapData, string playerSide = "Allied", int startingCredits = 10000)
         {
             var sim = new GameSimulation(rules, mapData);
             string aiSide = string.Equals(playerSide, "Soviet", StringComparison.OrdinalIgnoreCase) ? "Allied" : "Soviet";
 
-            var player = new FactionState(0, "指挥官 (玩家)", playerSide, false) { Credits = 10000 };
-            var ai = new FactionState(1, "电脑遭遇战 AI", aiSide, true) { Credits = 10000 };
+            int clampedCredits = Math.Clamp(startingCredits, 2500, 50000);
+            var player = new FactionState(0, "指挥官 (玩家)", playerSide, false) { Credits = clampedCredits };
+            var ai = new FactionState(1, "电脑遭遇战 AI", aiSide, true) { Credits = clampedCredits };
             sim._factions.Add(player);
             sim._factions.Add(ai);
 

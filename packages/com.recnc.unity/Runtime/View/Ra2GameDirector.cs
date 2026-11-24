@@ -14,8 +14,11 @@ namespace ReCnc.Unity.View
         public Ra2AssetRegistry AssetRegistry;
         public string MapFileName = "maps/skirmish_valley.json";
         public string PlayerSide = "Allied";
+        public int StartingCredits = 10000;
         public bool Pure3DStructuresMode = false;
+        public bool IsInSkirmishLobby = true;
 
+        public List<SkirmishMapEntryData> AvailableMaps { get; private set; } = new List<SkirmishMapEntryData>();
         public GameSimulation Simulation { get; private set; }
         public Terrain3DBuilder TerrainBuilder { get; private set; }
 
@@ -64,18 +67,87 @@ namespace ReCnc.Unity.View
                 : (Shader.Find("ReCnc/Ra2VoxelTeamLit") ?? Shader.Find("Universal Render Pipeline/Lit"));
             _voxelTemplateMat = new Material(voxelShader);
 
+            LoadAvailableMapsCatalog();
+            if (!IsInSkirmishLobby)
+            {
+                InitializeMatch();
+            }
+        }
+
+        private void LoadAvailableMapsCatalog()
+        {
+            AvailableMaps.Clear();
+            var catalog = TryLoadJsonFromStreamingAssets<SkirmishMapsCatalogData>("maps_index.json");
+            if (catalog != null && catalog.Maps != null && catalog.Maps.Count > 0)
+            {
+                AvailableMaps.AddRange(catalog.Maps);
+            }
+            else
+            {
+                AvailableMaps.Add(new SkirmishMapEntryData
+                {
+                    MapId = "skirmish_valley",
+                    DisplayName = "河谷争锋 (内置演示图)",
+                    Theater = "TEMPERATE",
+                    Width = 64,
+                    Height = 64,
+                    MinPlayers = 2,
+                    MaxPlayers = 2,
+                    JsonRelPath = "maps/skirmish_valley.json",
+                    IsOfficialRa2Map = false
+                });
+            }
+        }
+
+        public void StartSkirmish(SkirmishMapEntryData selectedMap, string playerSide, int startingCredits)
+        {
+            if (selectedMap != null && !string.IsNullOrEmpty(selectedMap.JsonRelPath))
+            {
+                MapFileName = selectedMap.JsonRelPath;
+            }
+            PlayerSide = string.IsNullOrEmpty(playerSide) ? "Allied" : playerSide;
+            StartingCredits = startingCredits;
+            IsInSkirmishLobby = false;
             InitializeMatch();
+        }
+
+        public void OpenSkirmishLobby()
+        {
+            IsInSkirmishLobby = true;
+        }
+
+        private void ClearAllMatchObjects()
+        {
+            foreach (var kv in _entityViews)
+            {
+                if (kv.Value != null) Destroy(kv.Value.gameObject);
+            }
+            _entityViews.Clear();
+
+            foreach (var kv in _projectileViews)
+            {
+                if (kv.Value != null) Destroy(kv.Value);
+            }
+            _projectileViews.Clear();
+
+            if (TerrainBuilder != null)
+            {
+                Destroy(TerrainBuilder.gameObject);
+                TerrainBuilder = null;
+            }
         }
 
         public void InitializeMatch()
         {
+            ClearAllMatchObjects();
+
             RulesBundleData importedRules = TryLoadJsonFromStreamingAssets<RulesBundleData>("rules_bundle.json");
             var catalog = RulesCatalog.CreateWithDefaults(importedRules);
 
             MapBundleData mapBundle = TryLoadJsonFromStreamingAssets<MapBundleData>(MapFileName)
                 ?? DefaultMapFactory.CreateSkirmishArena(64, 64);
 
-            Simulation = GameSimulation.CreateStandardSkirmish(catalog, mapBundle, PlayerSide);
+            Simulation = GameSimulation.CreateStandardSkirmish(catalog, mapBundle, PlayerSide, StartingCredits);
 
             if (TerrainBuilder != null) Destroy(TerrainBuilder.gameObject);
             var terrainGo = new GameObject("Ra2Terrain3D");
@@ -149,7 +221,7 @@ namespace ReCnc.Unity.View
 
         private void Update()
         {
-            if (Simulation == null) return;
+            if (IsInSkirmishLobby || Simulation == null) return;
 
             float dt = Mathf.Min(Time.deltaTime, 0.05f);
             Simulation.Step(dt);

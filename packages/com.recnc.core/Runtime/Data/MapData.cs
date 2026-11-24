@@ -4,6 +4,27 @@ using System.Collections.Generic;
 namespace ReCnc.Core.Data
 {
     [Serializable]
+    public class SkirmishMapsCatalogData
+    {
+        public List<SkirmishMapEntryData> Maps = new List<SkirmishMapEntryData>();
+    }
+
+    [Serializable]
+    public class SkirmishMapEntryData
+    {
+        public string MapId;
+        public string DisplayName;
+        public string Theater;
+        public int Width;
+        public int Height;
+        public int MinPlayers = 2;
+        public int MaxPlayers = 2;
+        public string JsonRelPath;
+        public string PreviewAssetPath;
+        public bool IsOfficialRa2Map;
+    }
+
+    [Serializable]
     public class MapBundleData
     {
         public string MapId = "demo_skirmish";

@@ -104,9 +104,9 @@ public sealed class AssetConversionPipeline
         }
         Console.WriteLine($"[5/6] 转换 2D 图像 (.shp -> .png): {manifest.Cameos.Count} 个建造图标, {manifest.Sprites.Count} 张建筑/步兵立绘");
 
-        // 6. Convert Audio (.bag + .idx -> .wav) & Skirmish Map
+        // 6. Convert Audio (.bag + .idx -> .wav) & Skirmish Maps
         ConvertAudioClips(manifest);
-        ExportSkirmishMaps(manifest, jsonOpts);
+        ExportSkirmishMaps(strings, manifest, jsonOpts);
         Console.WriteLine($"[6/6] 转换音频与地图: {manifest.Audios.Count} 条 WAV 语音/音效, {manifest.Maps.Count} 张 3D 地图数据");
 
         File.WriteAllText(Path.Combine(_streamingOutDir, "asset_manifest.json"), JsonSerializer.Serialize(manifest, jsonOpts));
@@ -492,31 +492,113 @@ public sealed class AssetConversionPipeline
         }
     }
 
-    private void ExportSkirmishMaps(ConvertedAssetManifest manifest, JsonSerializerOptions jsonOpts)
+    private void ExportSkirmishMaps(Dictionary<string, string> csf, ConvertedAssetManifest manifest, JsonSerializerOptions jsonOpts)
     {
         string mapsDir = Path.Combine(_streamingOutDir, "maps");
+        string previewsDir = Path.Combine(_streamingOutDir, "previews");
         Directory.CreateDirectory(mapsDir);
+        Directory.CreateDirectory(previewsDir);
 
-        // Always export clean balanced default skirmish map
-        var defaultMap = DefaultMapFactory.CreateSkirmishArena(64, 64);
-        string defaultPath = Path.Combine(mapsDir, "skirmish_valley.json");
-        File.WriteAllText(defaultPath, JsonSerializer.Serialize(defaultMap, jsonOpts));
-        manifest.Maps.Add("maps/skirmish_valley.json");
+        var catalog = new SkirmishMapsCatalogData();
 
-        // Also check official multiplayer map archives for an authentic RA2 map sample
-        string[] candidateMapNames = { "mp01t2.map", "mp02t2.map", "mp03t4.map", "eb1.yrm", "mp08t2.map" };
-        foreach (string mapFile in candidateMapNames)
+        // Build Theater Tile Classifiers across all 6 RA2/YR theaters
+        var classifiers = new Dictionary<string, TheaterTileClassifier>(StringComparer.OrdinalIgnoreCase)
         {
-            byte[]? bytes = _vfs.TryReadFile(mapFile);
-            if (bytes == null) continue;
-            string id = Path.GetFileNameWithoutExtension(mapFile);
-            var converted = Ra2MapExtractor.TryConvertSkirmishMap(id, $"官方地图 ({id.ToUpperInvariant()})", bytes);
-            if (converted != null)
+            ["TEMPERATE"] = new TheaterTileClassifier(LoadIni("temperatmd.ini") ?? LoadIni("temperat.ini")),
+            ["SNOW"]      = new TheaterTileClassifier(LoadIni("snowmd.ini") ?? LoadIni("snow.ini")),
+            ["URBAN"]     = new TheaterTileClassifier(LoadIni("urbanmd.ini") ?? LoadIni("urban.ini")),
+            ["NEWURBAN"]  = new TheaterTileClassifier(LoadIni("ubnmd.ini") ?? LoadIni("urbanmd.ini")),
+            ["DESERT"]    = new TheaterTileClassifier(LoadIni("desertmd.ini")),
+            ["LUNAR"]     = new TheaterTileClassifier(LoadIni("lunarmd.ini")),
+        };
+
+        // Collect official skirmish map definitions from missionsmd.pkt & missions.pkt
+        var pktDocs = new List<IniDocument>();
+        if (LoadIni("missionsmd.pkt") is { } pktMd) pktDocs.Add(pktMd);
+        if (LoadIni("missions.pkt") is { } pktBase) pktDocs.Add(pktBase);
+
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        const int maxExportedMaps = 32;
+
+        foreach (var pkt in pktDocs)
+        {
+            var multiSec = pkt.GetSection("MultiMaps");
+            if (multiSec == null) continue;
+
+            foreach (var kv in multiSec.OrderedEntries)
             {
-                File.WriteAllText(Path.Combine(mapsDir, $"{id}.json"), JsonSerializer.Serialize(converted, jsonOpts));
-                manifest.Maps.Add($"maps/{id}.json");
-                break;
+                if (catalog.Maps.Count >= maxExportedMaps) break;
+                string mapStem = kv.Value.Trim();
+                if (string.IsNullOrEmpty(mapStem) || !seenIds.Add(mapStem)) continue;
+
+                var infoSec = pkt.GetSection(mapStem);
+                string modes = (infoSec?.GetString("GameMode", "standard") ?? "standard").ToLowerInvariant();
+                if (!modes.Contains("standard") && !modes.Contains("battle") && !modes.Contains("megawealth"))
+                    continue;
+
+                byte[]? mapBytes = _vfs.TryReadFile($"{mapStem}.map")
+                    ?? _vfs.TryReadFile($"{mapStem}.yrm")
+                    ?? _vfs.TryReadFile($"{mapStem}.mpr");
+                if (mapBytes == null) continue;
+
+                string descKey = infoSec?.GetString("Description", "") ?? "";
+                string displayName = !string.IsNullOrEmpty(descKey) && csf.TryGetValue(descKey, out string? locName) && !string.IsNullOrWhiteSpace(locName)
+                    ? locName.Trim()
+                    : mapStem;
+
+                int minP = Math.Max(2, infoSec?.GetInt("MinPlayers", 2) ?? 2);
+                int maxP = Math.Max(minP, infoSec?.GetInt("MaxPlayers", 2) ?? 2);
+
+                string safeId = mapStem.ToLowerInvariant();
+                var (converted, prevRgba, prevW, prevH) = Ra2MapExtractor.TryExtractFullMap(safeId, displayName, mapBytes, classifiers);
+                if (converted == null) continue;
+
+                string relJson = $"maps/{safeId}.json";
+                File.WriteAllText(Path.Combine(mapsDir, $"{safeId}.json"), JsonSerializer.Serialize(converted, jsonOpts));
+                manifest.Maps.Add(relJson);
+
+                string previewRel = "";
+                if (prevRgba != null && prevW > 0 && prevH > 0)
+                {
+                    previewRel = $"previews/{safeId}.png";
+                    PngWriter.SaveRgba32(Path.Combine(previewsDir, $"{safeId}.png"), prevW, prevH, prevRgba);
+                }
+
+                catalog.Maps.Add(new SkirmishMapEntryData
+                {
+                    MapId = safeId,
+                    DisplayName = displayName,
+                    Theater = converted.Theater,
+                    Width = converted.Width,
+                    Height = converted.Height,
+                    MinPlayers = minP,
+                    MaxPlayers = Math.Max(maxP, converted.Waypoints.Count),
+                    JsonRelPath = relJson,
+                    PreviewAssetPath = previewRel,
+                    IsOfficialRa2Map = true
+                });
             }
         }
+
+        // Also include built-in balanced valley map as last fallback option
+        var defaultMap = DefaultMapFactory.CreateSkirmishArena(64, 64);
+        string defaultRel = "maps/skirmish_valley.json";
+        File.WriteAllText(Path.Combine(mapsDir, "skirmish_valley.json"), JsonSerializer.Serialize(defaultMap, jsonOpts));
+        manifest.Maps.Add(defaultRel);
+        catalog.Maps.Add(new SkirmishMapEntryData
+        {
+            MapId = "skirmish_valley",
+            DisplayName = "河谷争锋 (内置对称演示图)",
+            Theater = "TEMPERATE",
+            Width = defaultMap.Width,
+            Height = defaultMap.Height,
+            MinPlayers = 2,
+            MaxPlayers = 2,
+            JsonRelPath = defaultRel,
+            PreviewAssetPath = "",
+            IsOfficialRa2Map = false
+        });
+
+        File.WriteAllText(Path.Combine(_streamingOutDir, "maps_index.json"), JsonSerializer.Serialize(catalog, jsonOpts));
     }
 }

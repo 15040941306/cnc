@@ -51,11 +51,16 @@ namespace ReCnc.Unity.World
             var cols = new List<Color>(map.Width * map.Height * 8);
             var tris = new List<int>(map.Width * map.Height * 18);
 
+            bool hasWater = false;
+            Color cliffCol = GetCliffColor(map.Theater);
+
             for (int y = 0; y < map.Height; y++)
             {
                 for (int x = 0; x < map.Width; x++)
                 {
                     var cell = map.GetCell(x, y);
+                    if (cell.Terrain == TerrainKind.Water) hasWater = true;
+
                     float x0 = x * WorldCoords.CellSize;
                     float x1 = (x + 1) * WorldCoords.CellSize;
                     float z0 = y * WorldCoords.CellSize;
@@ -66,7 +71,7 @@ namespace ReCnc.Unity.World
                     float h11 = SampleCornerHeight(map, x, y, 1, 1);
                     float h01 = SampleCornerHeight(map, x, y, 0, 1);
 
-                    Color topColor = GetTerrainColor(cell, x, y);
+                    Color topColor = GetTerrainColor(cell, map.Theater, x, y);
                     AddQuad(verts, norms, cols, tris,
                         new Vector3(x0, h00, z0),
                         new Vector3(x0, h01, z1),
@@ -75,7 +80,6 @@ namespace ReCnc.Unity.World
                         topColor);
 
                     // Cliff skirts between adjacent cells of different heights
-                    Color cliffCol = new Color(0.36f, 0.33f, 0.28f, 1f);
                     if (x + 1 < map.Width)
                     {
                         float nh0 = SampleCornerHeight(map, x + 1, y, 0, 0);
@@ -146,16 +150,20 @@ namespace ReCnc.Unity.World
             var mc = terrainGo.AddComponent<MeshCollider>();
             mc.sharedMesh = mesh;
 
-            // Create semi-transparent 3D river water surface at height 1.55
-            var waterGo = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            waterGo.name = "RiverWaterSurface";
-            Destroy(waterGo.GetComponent<Collider>());
-            waterGo.transform.SetParent(transform, false);
-            waterGo.transform.position = new Vector3(map.Width * WorldCoords.CellSize * 0.5f, 1.52f * WorldCoords.HeightStep, map.Height * WorldCoords.CellSize * 0.5f);
-            waterGo.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
-            waterGo.transform.localScale = new Vector3(map.Width * WorldCoords.CellSize, map.Height * WorldCoords.CellSize, 1f);
-            var waterMat = CreateLitMaterial(new Color(0.11f, 0.38f, 0.62f, 0.85f), 0.85f);
-            waterGo.GetComponent<MeshRenderer>().sharedMaterial = waterMat;
+            if (hasWater)
+            {
+                var waterGo = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                waterGo.name = "RiverWaterSurface";
+                Destroy(waterGo.GetComponent<Collider>());
+                waterGo.transform.SetParent(transform, false);
+                waterGo.transform.position = new Vector3(map.Width * WorldCoords.CellSize * 0.5f, 1.52f * WorldCoords.HeightStep, map.Height * WorldCoords.CellSize * 0.5f);
+                waterGo.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+                waterGo.transform.localScale = new Vector3(map.Width * WorldCoords.CellSize, map.Height * WorldCoords.CellSize, 1f);
+                Color wCol = map.Theater == "SNOW" ? new Color(0.22f, 0.52f, 0.72f, 0.88f)
+                    : map.Theater == "DESERT" ? new Color(0.12f, 0.48f, 0.58f, 0.85f)
+                    : new Color(0.11f, 0.38f, 0.62f, 0.85f);
+                waterGo.GetComponent<MeshRenderer>().sharedMaterial = CreateLitMaterial(wCol, 0.85f);
+            }
 
             _goldOreMat = CreateLitMaterial(new Color(0.95f, 0.74f, 0.14f, 1f), 0.72f);
             _gemOreMat = CreateLitMaterial(new Color(0.86f, 0.18f, 0.92f, 1f), 0.88f);
@@ -240,21 +248,52 @@ namespace ReCnc.Unity.World
             return cnt > 0 ? sum / cnt : cell.HeightLevel * WorldCoords.HeightStep;
         }
 
-        private static Color GetTerrainColor(GridCell cell, int x, int y)
+        private static Color GetCliffColor(string theater)
         {
-            float checker = ((x + y) & 1) == 0 ? 1.0f : 0.955f;
+            switch ((theater ?? "").ToUpperInvariant())
+            {
+                case "SNOW": return new Color(0.46f, 0.50f, 0.56f, 1f);
+                case "DESERT": return new Color(0.58f, 0.43f, 0.28f, 1f);
+                case "URBAN":
+                case "NEWURBAN": return new Color(0.36f, 0.37f, 0.39f, 1f);
+                case "LUNAR": return new Color(0.38f, 0.38f, 0.40f, 1f);
+                default: return new Color(0.38f, 0.34f, 0.28f, 1f);
+            }
+        }
+
+        private static Color GetTerrainColor(GridCell cell, string theater, int x, int y)
+        {
+            float checker = ((x + y) & 1) == 0 ? 1.0f : 0.96f;
+            string th = (theater ?? "TEMPERATE").ToUpperInvariant();
+
             switch (cell.Terrain)
             {
                 case TerrainKind.Road:
-                    return new Color(0.42f, 0.43f, 0.45f) * checker;
+                    return new Color(0.38f, 0.39f, 0.42f) * checker;
                 case TerrainKind.Water:
-                    return new Color(0.08f, 0.25f, 0.38f);
+                    return new Color(0.08f, 0.24f, 0.38f);
                 case TerrainKind.Rock:
-                    return new Color(0.38f, 0.35f, 0.31f) * checker;
+                    return GetCliffColor(th) * checker;
+                case TerrainKind.Beach:
+                    return th == "SNOW"
+                        ? new Color(0.74f, 0.79f, 0.84f) * checker
+                        : new Color(0.76f, 0.68f, 0.48f) * checker;
                 default:
-                    if (cell.HeightLevel >= 3)
-                        return new Color(0.32f, 0.49f, 0.24f) * checker;
-                    return new Color(0.27f, 0.45f, 0.21f) * checker;
+                    bool high = cell.HeightLevel >= 3;
+                    switch (th)
+                    {
+                        case "SNOW":
+                            return (high ? new Color(0.88f, 0.92f, 0.97f) : new Color(0.80f, 0.86f, 0.93f)) * checker;
+                        case "URBAN":
+                        case "NEWURBAN":
+                            return (high ? new Color(0.54f, 0.55f, 0.57f) : new Color(0.47f, 0.49f, 0.50f)) * checker;
+                        case "DESERT":
+                            return (high ? new Color(0.82f, 0.68f, 0.44f) : new Color(0.76f, 0.61f, 0.38f)) * checker;
+                        case "LUNAR":
+                            return (high ? new Color(0.58f, 0.58f, 0.61f) : new Color(0.50f, 0.50f, 0.53f)) * checker;
+                        default:
+                            return (high ? new Color(0.32f, 0.49f, 0.24f) : new Color(0.27f, 0.45f, 0.21f)) * checker;
+                    }
             }
         }
 

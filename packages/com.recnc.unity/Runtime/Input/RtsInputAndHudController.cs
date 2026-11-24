@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using ReCnc.Core.Data;
 using ReCnc.Core.Map;
 using ReCnc.Core.Simulation;
@@ -40,6 +41,13 @@ namespace ReCnc.Unity.InputControl
         private GUIStyle _tabBtnStyle;
         private GUIStyle _tabActiveStyle;
 
+        // Skirmish Lobby state
+        private Vector2 _mapListScroll;
+        private int _selectedMapIndex;
+        private string _lobbySide = "Allied";
+        private int _lobbyCredits = 10000;
+        private readonly Dictionary<string, Texture2D> _previewTexCache = new Dictionary<string, Texture2D>();
+
         private void Start()
         {
             if (Director == null) Director = FindObjectOfType<Ra2GameDirector>();
@@ -54,7 +62,20 @@ namespace ReCnc.Unity.InputControl
 
         private void Update()
         {
-            if (Director == null || Director.Simulation == null) return;
+            if (Director == null) return;
+            if (Director.IsInSkirmishLobby || Director.Simulation == null)
+            {
+                ExitPlacementMode();
+                return;
+            }
+
+            if (Input.GetKeyDown(KeyCode.M))
+            {
+                ClearSelection();
+                ExitPlacementMode();
+                Director.OpenSkirmishLobby();
+                return;
+            }
 
             PruneDeadSelections();
             HandleHotkeys();
@@ -486,14 +507,180 @@ namespace ReCnc.Unity.InputControl
 
         private void OnGUI()
         {
-            if (Director == null || Director.Simulation == null) return;
+            if (Director == null) return;
             EnsureStyles();
+
+            if (Director.IsInSkirmishLobby || Director.Simulation == null)
+            {
+                DrawSkirmishLobbyScreen();
+                return;
+            }
 
             DrawWorldHealthBars();
             DrawSelectionBoxGui();
             DrawTopLeftHelpOverlay();
             DrawRightSidebar();
             DrawVictoryOverlay();
+        }
+
+        private void DrawSkirmishLobbyScreen()
+        {
+            // Dark tactical backdrop
+            GUI.color = new Color(0.04f, 0.06f, 0.09f, 0.90f);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), _whiteTex);
+            GUI.color = Color.white;
+
+            float winW = Mathf.Min(880f, Screen.width - 40f);
+            float winH = Mathf.Min(560f, Screen.height - 40f);
+            Rect win = new Rect((Screen.width - winW) * 0.5f, (Screen.height - winH) * 0.5f, winW, winH);
+            GUI.DrawTexture(win, _panelBgTex);
+
+            GUILayout.BeginArea(new Rect(win.x + 20f, win.y + 16f, win.width - 40f, win.height - 32f));
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("创建遭遇战 (Create Skirmish) — 选择《红色警戒2》地图", _headerStyle);
+            GUILayout.FlexibleSpace();
+            if (Director.Simulation != null)
+            {
+                if (GUILayout.Button("返回当前战局", _tabBtnStyle, GUILayout.Width(110f), GUILayout.Height(26f)))
+                {
+                    Director.IsInSkirmishLobby = false;
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(10f);
+
+            var maps = Director.AvailableMaps;
+            if (maps == null || maps.Count == 0)
+            {
+                GUILayout.Label("正在加载地图列表...", _labelStyle);
+                GUILayout.EndArea();
+                return;
+            }
+
+            _selectedMapIndex = Mathf.Clamp(_selectedMapIndex, 0, maps.Count - 1);
+            var selMap = maps[_selectedMapIndex];
+
+            GUILayout.BeginHorizontal();
+
+            // Left Column: Scrollable Official RA2 Map List
+            float listW = winW * 0.46f;
+            GUILayout.BeginVertical(GUILayout.Width(listW));
+            GUILayout.Label($"可用遭遇战地图 ({maps.Count} 张):", _labelStyle);
+            _mapListScroll = GUILayout.BeginScrollView(_mapListScroll, false, true, GUILayout.Width(listW), GUILayout.Height(winH - 108f));
+            for (int i = 0; i < maps.Count; i++)
+            {
+                var m = maps[i];
+                string thBadge = FormatTheaterBadge(m.Theater);
+                string rowText = $"{thBadge} {m.DisplayName}  [{m.Width}x{m.Height}]";
+                GUIStyle btnStyle = (i == _selectedMapIndex) ? _tabActiveStyle : _tabBtnStyle;
+                if (GUILayout.Button(rowText, btnStyle, GUILayout.Height(28f)))
+                {
+                    _selectedMapIndex = i;
+                    Director.PlayClip2D("utab", 0.6f);
+                }
+            }
+            GUILayout.EndScrollView();
+            GUILayout.EndVertical();
+
+            GUILayout.Space(18f);
+
+            // Right Column: Official Minimap Preview + Match Settings + Start Button
+            float rightW = winW - listW - 64f;
+            GUILayout.BeginVertical(GUILayout.Width(rightW));
+            GUILayout.Label("当前选中: " + selMap.DisplayName, _headerStyle);
+
+            Rect prevBox = GUILayoutUtility.GetRect(rightW, 200f);
+            GUI.color = new Color(0.03f, 0.05f, 0.07f, 1f);
+            GUI.DrawTexture(prevBox, _whiteTex);
+            GUI.color = Color.white;
+
+            Texture2D prevTex = GetOrLoadMapPreview(selMap);
+            if (prevTex != null)
+            {
+                GUI.DrawTexture(new Rect(prevBox.x + 6f, prevBox.y + 6f, prevBox.width - 12f, prevBox.height - 12f), prevTex, ScaleMode.ScaleToFit);
+            }
+            else
+            {
+                GUI.Label(new Rect(prevBox.x + 20f, prevBox.y + 88f, prevBox.width - 40f, 24f), "内置对称 3D 遭遇战演示地形", _labelStyle);
+            }
+
+            GUILayout.Space(8f);
+            GUILayout.Label($"地貌环境: {FormatTheaterBadge(selMap.Theater)} ({selMap.Theater})   |   地图尺寸: {selMap.Width} × {selMap.Height} 格   |   支持玩家: {selMap.MinPlayers}~{selMap.MaxPlayers} 人", _smallStyle);
+            GUILayout.Space(12f);
+
+            // Player Faction Selection
+            GUILayout.Label("选择你的阵营:", _labelStyle);
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("盟军 (Allied)", _lobbySide == "Allied" ? _tabActiveStyle : _tabBtnStyle, GUILayout.Height(30f)))
+                _lobbySide = "Allied";
+            if (GUILayout.Button("苏联 (Soviet)", _lobbySide == "Soviet" ? _tabActiveStyle : _tabBtnStyle, GUILayout.Height(30f)))
+                _lobbySide = "Soviet";
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(10f);
+
+            // Starting Credits Selection
+            GUILayout.Label("初始作战资金:", _labelStyle);
+            GUILayout.BeginHorizontal();
+            int[] creditChoices = { 5000, 10000, 20000 };
+            for (int c = 0; c < creditChoices.Length; c++)
+            {
+                int val = creditChoices[c];
+                if (GUILayout.Button("$" + val, _lobbyCredits == val ? _tabActiveStyle : _tabBtnStyle, GUILayout.Height(28f)))
+                    _lobbyCredits = val;
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.FlexibleSpace();
+
+            if (GUILayout.Button("▶ 开始遭遇战 (Start Skirmish)", _tabActiveStyle, GUILayout.Height(44f)))
+            {
+                ClearSelection();
+                ExitPlacementMode();
+                Director.StartSkirmish(selMap, _lobbySide, _lobbyCredits);
+            }
+
+            GUILayout.EndVertical();
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+        }
+
+        private Texture2D GetOrLoadMapPreview(SkirmishMapEntryData map)
+        {
+            if (map == null || string.IsNullOrEmpty(map.PreviewAssetPath)) return null;
+            Texture2D cached;
+            if (_previewTexCache.TryGetValue(map.MapId, out cached)) return cached;
+
+            string fullPath = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", map.PreviewAssetPath);
+            if (!File.Exists(fullPath))
+            {
+                _previewTexCache[map.MapId] = null;
+                return null;
+            }
+
+            byte[] pngBytes = File.ReadAllBytes(fullPath);
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            tex.LoadImage(pngBytes);
+            _previewTexCache[map.MapId] = tex;
+            return tex;
+        }
+
+        private static string FormatTheaterBadge(string theater)
+        {
+            switch ((theater ?? "").ToUpperInvariant())
+            {
+                case "SNOW": return "[雪地]";
+                case "URBAN":
+                case "NEWURBAN": return "[城市]";
+                case "DESERT": return "[沙漠]";
+                case "LUNAR": return "[月球]";
+                default: return "[温带]";
+            }
         }
 
         private void DrawWorldHealthBars()
@@ -553,17 +740,25 @@ namespace ReCnc.Unity.InputControl
 
         private void DrawTopLeftHelpOverlay()
         {
-            Rect box = new Rect(12f, 12f, 360f, 108f);
+            Rect box = new Rect(12f, 12f, 390f, 134f);
             GUI.DrawTexture(box, _panelBgTex);
             GUILayout.BeginArea(new Rect(box.x + 10f, box.y + 8f, box.width - 20f, box.height - 14f));
-            GUILayout.Label("红色警戒2 Unity 全3D重制原型", _headerStyle);
+            GUILayout.Label("当前战场: " + Director.Simulation.Map.DisplayName, _headerStyle);
             GUILayout.Label("镜头: WASD平移 | 滚轮缩放 | Q/E或Alt+中键旋转 | H回基地", _smallStyle);
             GUILayout.Label("操作: 左键点选/框选 | 双击基地车(或按G)展开 | 右键移动/攻击/采矿", _smallStyle);
-            string modeLabel = Director.Pure3DStructuresMode ? "原版复古模式(VXL+立绘)" : "Blender 3D翻新精模(PBR)";
-            if (GUILayout.Button("[V] 切换画质模式 (当前: " + modeLabel + ")", _tabBtnStyle, GUILayout.Height(22f)))
+            GUILayout.BeginHorizontal();
+            string modeLabel = Director.Pure3DStructuresMode ? "复古(VXL+立绘)" : "3D精模(PBR)";
+            if (GUILayout.Button("[V] 画质: " + modeLabel, _tabBtnStyle, GUILayout.Height(24f)))
             {
                 Director.ToggleStructureVisualMode();
             }
+            if (GUILayout.Button("[M] 遭遇战换图大厅", _tabActiveStyle, GUILayout.Width(145f), GUILayout.Height(24f)))
+            {
+                ClearSelection();
+                ExitPlacementMode();
+                Director.OpenSkirmishLobby();
+            }
+            GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
 
