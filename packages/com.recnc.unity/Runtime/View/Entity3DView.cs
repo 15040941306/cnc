@@ -206,7 +206,28 @@ namespace ReCnc.Unity.View
                 var newMats = new Material[srcMats.Length];
                 for (int m = 0; m < srcMats.Length; m++)
                 {
-                    string slotName = srcMats[m] != null ? srcMats[m].name : "Mat_BrushedSteel";
+                    Material srcMat = srcMats[m];
+                    string slotName = srcMat != null ? srcMat.name : "Mat_BrushedSteel";
+                    if (slotName.StartsWith("Mat_AiBaked"))
+                    {
+                        PbrTexturePairEntry bakedTex = registry != null ? registry.GetPbrTextures("AiBaked_" + BoundState.Def.Id) : null;
+                        Texture mainTex = (bakedTex != null && bakedTex.AlbedoMap != null)
+                            ? bakedTex.AlbedoMap
+                            : (srcMat != null ? srcMat.mainTexture : null);
+                        Shader urpLit = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+                        var aiMat = new Material(urpLit);
+                        Ra2PbrMaterials.SetLitColor(aiMat, Color.white);
+                        if (mainTex != null)
+                        {
+                            if (aiMat.HasProperty("_BaseMap")) aiMat.SetTexture("_BaseMap", mainTex);
+                            aiMat.mainTexture = mainTex;
+                        }
+                        if (aiMat.HasProperty("_Metallic")) aiMat.SetFloat("_Metallic", 0.18f);
+                        if (aiMat.HasProperty("_Smoothness")) aiMat.SetFloat("_Smoothness", 0.36f);
+                        newMats[m] = aiMat;
+                        continue;
+                    }
+
                     bool isTeam;
                     Material resolved = Ra2PbrMaterials.ResolveSlotMaterial(slotName, _teamColor, registry, out isTeam);
                     newMats[m] = resolved;

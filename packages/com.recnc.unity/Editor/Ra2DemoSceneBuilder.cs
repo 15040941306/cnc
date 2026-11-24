@@ -50,7 +50,20 @@ namespace ReCnc.Unity.Editor
             bool remasteredFilesOnDisk = Directory.Exists("Assets/_ReCncGenerated/RemasteredModels");
             bool pbrTexOnDisk = Directory.Exists("Assets/_ReCncGenerated/RemasteredTextures");
 
-            if (hasOriginal && (hasRemastered || !remasteredFilesOnDisk) && (hasPbrTextures || !pbrTexOnDisk))
+            int aiFilesCount = Directory.Exists("Assets/_ReCncGenerated/RemasteredTextures/AiBaked")
+                ? Directory.GetFiles("Assets/_ReCncGenerated/RemasteredTextures/AiBaked", "*_albedo.png").Length
+                : 0;
+            int boundAiCount = 0;
+            if (existing != null && existing.PbrTextures != null)
+            {
+                for (int i = 0; i < existing.PbrTextures.Count; i++)
+                {
+                    if (existing.PbrTextures[i].MaterialSlotName != null && existing.PbrTextures[i].MaterialSlotName.StartsWith("AiBaked_"))
+                        boundAiCount++;
+                }
+            }
+
+            if (hasOriginal && (hasRemastered || !remasteredFilesOnDisk) && (hasPbrTextures || !pbrTexOnDisk) && boundAiCount == aiFilesCount)
             {
                 return;
             }
@@ -276,7 +289,28 @@ namespace ReCnc.Unity.Editor
             BindPbrSlot(registry, "Mat_TreadRubber",     "tex_tread.png",         "tex_tread_n.png");
             BindPbrSlot(registry, "Mat_SovietGate",      "tex_soviet_gate.png",   null);
             BindPbrSlot(registry, "Mat_AlliedCrest",     "tex_allied_crest.png",  null);
-            BindPbrSlot(registry, "Mat_ShutterDoor",     "tex_shutter_door.png",  "tex_shutter_door_n.png");
+            BindPbrSlot(registry, "Mat_ShutterDoor",     "tex_shutter_door.png",  null != null ? null : "tex_shutter_door_n.png");
+
+            // Bind any local Hunyuan3D AI-baked textures (RemasteredTextures/AiBaked/<ActorId>_albedo.png)
+            if (Directory.Exists("Assets/_ReCncGenerated/RemasteredTextures/AiBaked"))
+            {
+                string[] aiPngs = Directory.GetFiles("Assets/_ReCncGenerated/RemasteredTextures/AiBaked", "*_albedo.png");
+                for (int i = 0; i < aiPngs.Length; i++)
+                {
+                    string assetPath = aiPngs[i].Replace('\\', '/');
+                    string fileStem = Path.GetFileNameWithoutExtension(assetPath); // <ID>_albedo
+                    string actorId = fileStem.Substring(0, fileStem.Length - "_albedo".Length);
+                    var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+                    if (tex != null)
+                    {
+                        registry.PbrTextures.Add(new PbrTexturePairEntry
+                        {
+                            MaterialSlotName = "AiBaked_" + actorId,
+                            AlbedoMap = tex
+                        });
+                    }
+                }
+            }
 
             // 1. Bind all 28 Blender 3D Remastered FBX models
             string remManifestPath = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", "remastered_manifest.json");

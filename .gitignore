@@ -4,10 +4,11 @@ artifacts/
 [Oo]bj/
 TestResults/
 
-# Converted original game assets (keep proprietary RA2 assets out of git)
+# Converted original game assets (keep proprietary RA2/RA3 assets out of git)
 raw_assets/
 converted_assets/
 ra2_assets*.zip
+*.big
 unity/**/Assets/StreamingAssets/Ra2Converted*
 unity/**/Assets/_ReCncGenerated*
 
