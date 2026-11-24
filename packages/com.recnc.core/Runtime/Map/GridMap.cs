@@ -206,8 +206,10 @@ namespace ReCnc.Core.Map
             if (!dst.IsLandPassable) return false;
 
             int dh = Math.Abs(dst.HeightLevel - src.HeightLevel);
-            if (dh > 1) return false;
-            if (dh == 1 && src.RampType == 0 && dst.RampType == 0) return false;
+            // Real cliff rock & water are already blocked by dst.IsLandPassable above.
+            // On passable terrain, dh <= 1 is a gentle continuous slope, and dh == 2 is traversable via ramps!
+            if (dh > 2) return false;
+            if (dh == 2 && src.RampType == 0 && dst.RampType == 0) return false;
 
             // Prevent diagonal corner cutting through buildings/cliffs
             int dx = toX - fromX;

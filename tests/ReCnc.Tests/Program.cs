@@ -197,6 +197,32 @@ Powered=no
         var vxl = VxlDocument.Parse(mtnkVxl!);
         Assert(vxl.Limbs.Count >= 1 && vxl.Limbs[0].SizeX > 0, "mtnk.vxl must decode valid 3D voxel limbs");
 
+        // Verify extracted official skirmish maps allow ground units to traverse high ground / ramps between spawns!
+        var tempIni = IniDocument.Parse(vfs.TryReadFile("temperatmd.ini") ?? vfs.TryReadFile("temperat.ini")!);
+        var classifiers = new Dictionary<string, TheaterTileClassifier>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TEMPERATE"] = new TheaterTileClassifier(tempIni),
+            ["SNOW"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("snowmd.ini") ?? vfs.TryReadFile("snow.ini")!)),
+            ["URBAN"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("urbanmd.ini") ?? vfs.TryReadFile("urban.ini")!)),
+            ["NEWURBAN"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("ubnmd.ini") ?? vfs.TryReadFile("urbanmd.ini")!)),
+            ["DESERT"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("desertmd.ini")!)),
+            ["LUNAR"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("lunarmd.ini")!)),
+        };
+        foreach (string mapName in new[] { "bldfeud.map", "xdeadman.map", "dunepatr.map", "xmp14t2.map", "xgrinder.map", "xeb3.map", "fight.map" })
+        {
+            byte[]? mb = vfs.TryReadFile(mapName);
+            Assert(mb != null, $"Must read {mapName}");
+            var (mapBundle, _, _, _) = Ra2MapExtractor.TryExtractFullMap(mapName, mapName, mb!, classifiers);
+            Assert(mapBundle != null && mapBundle.Waypoints.Count >= 2, $"Must parse {mapName}");
+
+            var sim = GameSimulation.CreateStandardSkirmish(RulesCatalog.CreateWithDefaults(null), mapBundle!);
+            var p0Unit = sim.Entities.First(e => e.FactionId == 0 && !e.Def.IsBuilding);
+            var p1Unit = sim.Entities.First(e => e.FactionId == 1 && !e.Def.IsBuilding);
+            var path = AStarPathfinder.FindPath(sim.Map, p0Unit.Position.ToCell(), p1Unit.Position.ToCell());
+            Assert(path.Count > 5 && path[^1].DistanceTo(p1Unit.Position.ToCell()) <= 3f,
+                $"Ground units on {mapName} must reach enemy spawn across ramps/high ground (got end={path.LastOrDefault()}, target={p1Unit.Position.ToCell()})");
+        }
+
         _passed++;
         Console.WriteLine("  [OK] TestRealRawAssetsIfAvailable");
     }

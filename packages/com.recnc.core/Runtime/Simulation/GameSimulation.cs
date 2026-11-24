@@ -94,21 +94,38 @@ namespace ReCnc.Core.Simulation
             {
                 baseHeight = centerCell.HeightLevel;
             }
-            for (int dy = -radius; dy <= radius; dy++)
+
+            // Generous buildable base pad (radius 8) + smooth 4-cell sloped apron (radius 9..12) so spawns on hills never create cliff walls!
+            int innerPad = Math.Max(7, radius);
+            int outerApron = innerPad + 4;
+            for (int dy = -outerApron; dy <= outerApron; dy++)
             {
-                for (int dx = -radius; dx <= radius; dx++)
+                for (int dx = -outerApron; dx <= outerApron; dx++)
                 {
                     var cell = Map.GetCell(center.X + dx, center.Y + dy);
-                    if (cell != null)
+                    if (cell == null) continue;
+
+                    int cheb = Math.Max(Math.Abs(dx), Math.Abs(dy));
+                    if (cheb <= innerPad)
                     {
                         cell.Terrain = TerrainKind.Clear;
                         cell.HeightLevel = baseHeight;
                         cell.RampType = 0;
-                        if (Math.Abs(dx) <= 5 && Math.Abs(dy) <= 5)
+                        if (cheb <= 5)
                         {
                             cell.OreAmount = 0;
                             cell.OreType = 0;
                         }
+                    }
+                    else if (cell.HeightLevel != baseHeight)
+                    {
+                        if (cell.Terrain == TerrainKind.Rock || cell.Terrain == TerrainKind.Water)
+                        {
+                            cell.Terrain = TerrainKind.Clear;
+                        }
+                        float t = (cheb - innerPad) / (float)(outerApron - innerPad + 1);
+                        cell.HeightLevel = (int)Math.Round(baseHeight * (1f - t) + cell.HeightLevel * t);
+                        cell.RampType = 1;
                     }
                 }
             }

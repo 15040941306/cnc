@@ -126,13 +126,26 @@ public static class Ra2MapExtractor
                 if (!ProjectRxRy(rx, ry, out int gx, out int gy)) continue;
 
                 var cell = grid[gx, gy];
-                cell.HeightLevel = Math.Clamp(zHeight / 2 + 1, 1, 12);
+                int hLvl = Math.Clamp(zHeight / 2 + 1, 1, 12);
                 if (classifier != null)
                 {
                     var (terr, ramp) = classifier.Classify(tileNum);
-                    cell.TerrainType = terr;
-                    cell.RampType = ramp;
-                    if (terr == 2) cell.HeightLevel = 1;
+                    if (ramp != 0)
+                    {
+                        cell.RampType = 1;
+                        cell.HeightLevel = visited[gx, gy] ? (cell.HeightLevel + hLvl) / 2 : hLvl;
+                        if (cell.TerrainType == 3) cell.TerrainType = 0;
+                    }
+                    else if (!visited[gx, gy] || cell.RampType == 0)
+                    {
+                        cell.HeightLevel = hLvl;
+                        cell.TerrainType = terr;
+                    }
+                    if (terr == 2 && cell.RampType == 0) cell.HeightLevel = 1;
+                }
+                else
+                {
+                    cell.HeightLevel = hLvl;
                 }
                 visited[gx, gy] = true;
             }
@@ -161,7 +174,7 @@ public static class Ra2MapExtractor
                 }
             }
 
-            // Automatically mark gentle height transitions (dh == 1) as navigable ramps unless cliff rock!
+            // Mark non-cliff height transitions (dh <= 2) as navigable slopes while keeping CliffSet (TerrainType==3) blocked!
             for (int y = 1; y < localH - 1; y++)
             {
                 for (int x = 1; x < localW - 1; x++)
@@ -169,10 +182,11 @@ public static class Ra2MapExtractor
                     var c = grid[x, y];
                     if (c.TerrainType == 2 || c.TerrainType == 3) continue;
                     int h = c.HeightLevel;
-                    if (Math.Abs(grid[x - 1, y].HeightLevel - h) == 1 ||
-                        Math.Abs(grid[x + 1, y].HeightLevel - h) == 1 ||
-                        Math.Abs(grid[x, y - 1].HeightLevel - h) == 1 ||
-                        Math.Abs(grid[x, y + 1].HeightLevel - h) == 1)
+                    int dL = grid[x - 1, y].TerrainType == 3 ? 0 : Math.Abs(grid[x - 1, y].HeightLevel - h);
+                    int dR = grid[x + 1, y].TerrainType == 3 ? 0 : Math.Abs(grid[x + 1, y].HeightLevel - h);
+                    int dD = grid[x, y - 1].TerrainType == 3 ? 0 : Math.Abs(grid[x, y - 1].HeightLevel - h);
+                    int dU = grid[x, y + 1].TerrainType == 3 ? 0 : Math.Abs(grid[x, y + 1].HeightLevel - h);
+                    if ((dL >= 1 && dL <= 2) || (dR >= 1 && dR <= 2) || (dD >= 1 && dD <= 2) || (dU >= 1 && dU <= 2))
                     {
                         c.RampType = 1;
                     }
@@ -201,17 +215,34 @@ public static class Ra2MapExtractor
                 int ry = idx / 512;
                 if (!ProjectRxRy(rx, ry, out int gx, out int gy)) continue;
 
-                int oreType = 0;
-                if ((ov >= 27 && ov <= 38) || (ov >= 102 && ov <= 126))
-                    oreType = 1; // Riparius / Vinifera Gold Ore
-                else if ((ov >= 39 && ov <= 50) || (ov >= 127 && ov <= 166))
-                    oreType = 2; // Cruentus / Aboreus Gems
-                else if (ov >= 24 && ov <= 26 || ov >= 237 && ov <= 238)
+                bool isBridge = (ov >= 24 && ov <= 26)
+                    || (ov >= 59 && ov <= 60)
+                    || (ov >= 74 && ov <= 101)
+                    || (ov >= 122 && ov <= 125)
+                    || (ov >= 233 && ov <= 238);
+
+                if (isBridge)
                 {
-                    // High bridge deck over water
-                    grid[gx, gy].TerrainType = 1;
-                    grid[gx, gy].HeightLevel = Math.Max(2, grid[gx, gy].HeightLevel);
+                    // Stamp continuous 2x2 road/bridge deck so diagonal bridges never leave 4-neighbor water gaps!
+                    for (int by = 0; by <= 1; by++)
+                    {
+                        for (int bx = 0; bx <= 1; bx++)
+                        {
+                            int bgx = Math.Clamp(gx + bx, 0, localW - 1);
+                            int bgy = Math.Clamp(gy + by, 0, localH - 1);
+                            grid[bgx, bgy].TerrainType = 1;
+                            grid[bgx, bgy].RampType = 1;
+                            grid[bgx, bgy].HeightLevel = Math.Max(2, grid[bgx, bgy].HeightLevel);
+                        }
+                    }
+                    continue;
                 }
+
+                int oreType = 0;
+                if (ov >= 27 && ov <= 38)
+                    oreType = 2; // GEM01..GEM12 High-value Purple Gems!
+                else if ((ov >= 102 && ov <= 121) || (ov >= 127 && ov <= 166))
+                    oreType = 1; // TIB01..TIB20 & TIB2/TIB3 Gold Ore!
 
                 if (oreType > 0 && grid[gx, gy].TerrainType != 2 && grid[gx, gy].TerrainType != 3)
                 {

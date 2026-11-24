@@ -9,7 +9,7 @@ namespace ReCnc.Core.Map
         private static readonly int[] NeighborDy = { 1, 1, 0, -1, -1, -1, 0, 1 };
         private static readonly float[] NeighborCost = { 1f, 1.4142f, 1f, 1.4142f, 1f, 1.4142f, 1f, 1.4142f };
 
-        public static List<CellCoord> FindPath(GridMap map, CellCoord start, CellCoord goal, int maxExpanded = 4096)
+        public static List<CellCoord> FindPath(GridMap map, CellCoord start, CellCoord goal, int maxExpanded = 16384)
         {
             var result = new List<CellCoord>();
             if (!map.InBounds(start)) return result;
