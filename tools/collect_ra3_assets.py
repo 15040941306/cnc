@@ -3,9 +3,9 @@
 collect_ra3_assets.py
 
 在安装有《命令与征服：红色警戒3》（或起义时刻）的 Windows 电脑上运行此脚本，
-自动扫描 Steam / EA App / 注册表安装目录，仅提取 3D 单位与建筑模型贴图所需的 .big 核心包
-（Data/StaticStream.big、GlobalStream.big、Core/1.x 补丁包及 .SkuDef 索引配置，跳过十几个 GB 的过场电影与地图），
-直接复制到项目的 raw_assets/ra3/ 目录并生成 manifest.json。
+自动扫描 Steam / EA App / 注册表安装目录，提取 3D 单位/建筑模型、地表材质以及全部遭遇战/战役地图包
+（StaticStream.big、GlobalStream.big、Terrain.big、MapsMultiplayer.big、MapsCampaign.big、Core 补丁包、外置 .map 与 .SkuDef），
+仅跳过数 GB 的真人过场电影与 WorldBuilder 重复编辑器缓存，复制到项目的 raw_assets/ra3/ 目录。
 
 零第三方依赖，仅使用 Python 3 标准库。
 """
@@ -25,13 +25,10 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "raw_assets" / "ra3"
 
-# Skip huge non-model archives (FMV movies, WorldBuilder 1.3GB duplicate cache, campaign/multiplayer maps)
+# Skip huge non-gameplay archives (FMV live-action movies & redundant 1.3GB WorldBuilder editor cache)
 SKIP_BIG_SUBSTRINGS = (
     "movie",
     "wbdata",
-    "mapscampaign",
-    "mapsmultiplayer",
-    "mapstutorial",
     "apt.big",
 )
 
@@ -171,8 +168,9 @@ def detect_ra3_dirs(exclude_dir: Path) -> list[Path]:
     return found
 
 
-def scan_ra3_model_packages(game_dir: Path, output_dir: Path, include_audio: bool, include_terrain: bool) -> list[tuple[Path, str]]:
-    results: list[tuple[Path, str]] = []
+def scan_ra3_model_packages(game_dir: Path, output_dir: Path, include_audio: bool, skip_maps: bool) -> list[tuple[Path, Path, str]]:
+    """Returns list of (src_path, relative_dest_path, category)."""
+    results: list[tuple[Path, Path, str]] = []
     out_res = output_dir.resolve()
 
     for entry in sorted(game_dir.rglob("*"), key=lambda p: p.as_posix().lower()):
@@ -184,11 +182,16 @@ def scan_ra3_model_packages(game_dir: Path, output_dir: Path, include_audio: boo
         except OSError:
             continue
 
+        rel = entry.relative_to(game_dir)
         name_lower = entry.name.lower()
         ext_lower = entry.suffix.lower()
 
         if ext_lower == ".skudef":
-            results.append((entry, "skudef_index"))
+            results.append((entry, rel, "skudef_index"))
+            continue
+
+        if not skip_maps and ext_lower == ".map":
+            results.append((entry, rel, "loose_map"))
             continue
 
         if ext_lower != ".big":
@@ -198,16 +201,33 @@ def scan_ra3_model_packages(game_dir: Path, output_dir: Path, include_audio: boo
             continue
         if not include_audio and any(a in name_lower for a in SKIP_AUDIO_UNLESS_REQUESTED):
             continue
-        if not include_terrain and "terrain" in name_lower:
+        if skip_maps and ("maps" in name_lower or "terrain" in name_lower):
             continue
 
-        if "staticstream" in name_lower or "patch" in name_lower or "core" in entry.as_posix().lower():
+        if "maps" in name_lower:
+            category = "maps_big"
+        elif "terrain" in name_lower:
+            category = "terrain_big"
+        elif "staticstream" in name_lower or "patch" in name_lower or "core" in entry.as_posix().lower():
             category = "model_static_stream"
         elif "globalstream" in name_lower or "shaders" in name_lower or "misc" in name_lower:
             category = "shared_stream"
         else:
             category = "extra_big"
-        results.append((entry, category))
+        results.append((entry, rel, category))
+
+    # Also check Windows %APPDATA%\Red Alert 3\Maps for user/custom skirmish maps
+    if not skip_maps and sys.platform == "win32":
+        import os
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            for folder_name in ("Red Alert 3", "Red Alert 3 Uprising"):
+                custom_maps_dir = Path(appdata) / folder_name / "Maps"
+                if custom_maps_dir.is_dir():
+                    for mp in sorted(custom_maps_dir.rglob("*")):
+                        if mp.is_file() and mp.suffix.lower() in {".map", ".tga", ".xml", ".str"}:
+                            rel_custom = Path("CustomMaps") / mp.relative_to(custom_maps_dir)
+                            results.append((mp, rel_custom, "custom_map"))
 
     return results
 
@@ -277,29 +297,28 @@ def resolve_game_dir(arg_dir: str | None, out_dir: Path) -> Path:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="收集《红色警戒3》3D 模型与贴图核心包 (.big / .SkuDef) 到 raw_assets/ra3/")
+    ap = argparse.ArgumentParser(description="收集《红色警戒3》3D 模型、贴图、地表材质与全部地图包到 raw_assets/ra3/")
     ap.add_argument("-g", "--game-dir", help="红警3安装目录（不传则在 Windows 下自动扫描 Steam / EA App / 注册表）")
     ap.add_argument("-o", "--output-dir", default=str(DEFAULT_OUTPUT_DIR), help=f"输出目录（默认: {DEFAULT_OUTPUT_DIR}）")
     ap.add_argument("--include-audio", action="store_true", help="同时收集语音音效包 (*Audio.big，约额外 740MB)")
-    ap.add_argument("--include-terrain", action="store_true", help="同时收集地表贴图包 (Terrain.big，约额外 135MB)")
+    ap.add_argument("--no-maps", action="store_true", help="跳过地图与地表包（默认包含 MapsMultiplayer/MapsCampaign/Terrain.big）")
     ap.add_argument("--overwrite", action="store_true", help="强制覆盖已存在的文件")
     args = ap.parse_args()
 
     out_dir = Path(args.output_dir.strip().strip('"').strip("'")).expanduser().resolve()
     game_dir = resolve_game_dir(args.game_dir, out_dir)
-    scanned = scan_ra3_model_packages(game_dir, out_dir, args.include_audio, args.include_terrain)
+    scanned = scan_ra3_model_packages(game_dir, out_dir, args.include_audio, args.no_maps)
     if not scanned:
-        raise SystemExit(f"[错误] 在 {game_dir} 中未找到可用的 .big 模型包。")
+        raise SystemExit(f"[错误] 在 {game_dir} 中未找到可用的 .big 模型/地图包。")
 
-    total_bytes = sum(p.stat().st_size for p, _ in scanned)
+    total_bytes = sum(p.stat().st_size for p, _, _ in scanned)
     print(f"源目录   : {game_dir}")
     print(f"目标目录 : {out_dir}")
-    print(f"待收集数 : {len(scanned)} 个核心文件（总计 {fmt_size(total_bytes)}，已自动跳过过场电影与地图大包）")
+    print(f"待收集数 : {len(scanned)} 个核心模型与地图文件（总计 {fmt_size(total_bytes)}，已自动跳过过场电影大包）")
     print("-" * 60)
 
     records: list[CollectedRa3File] = []
-    for idx, (src, cat) in enumerate(scanned, 1):
-        rel = src.relative_to(game_dir)
+    for idx, (src, rel, cat) in enumerate(scanned, 1):
         sz = src.stat().st_size
         sha, copied = copy_with_sha256(src, out_dir / rel, args.overwrite)
         tag = "复制" if copied else "跳过(未变)"
