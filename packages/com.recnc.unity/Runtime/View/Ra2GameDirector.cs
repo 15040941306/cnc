@@ -155,17 +155,6 @@ namespace ReCnc.Unity.View
             TerrainBuilder = terrainGo.AddComponent<Terrain3DBuilder>();
             TerrainBuilder.BuildTerrain(Simulation.Map);
 
-            // Replace terrain shader with crisp vertex-colored tactical URP shader if available
-            var terrainShader = Shader.Find("ReCnc/Ra2TerrainLit");
-            if (terrainShader != null)
-            {
-                var meshTrans = terrainGo.transform.Find("TerrainMesh");
-                if (meshTrans != null)
-                {
-                    meshTrans.GetComponent<MeshRenderer>().sharedMaterial = new Material(terrainShader);
-                }
-            }
-
             // Jump camera to player's starting MCV
             var camCtrl = FindObjectOfType<RtsCamera3DController>();
             if (camCtrl != null)
