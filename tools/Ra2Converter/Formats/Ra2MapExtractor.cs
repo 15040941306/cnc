@@ -2,202 +2,240 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using ReCnc.Core.Data;
 
 namespace Ra2Converter.Formats;
 
-public sealed class TheaterTileClassifier
+public sealed class ExtractedRa2MapResult
 {
-    private readonly int[] _tileTerrain = new int[8192];
-    private readonly bool[] _tileIsRamp = new bool[8192];
-
-    public TheaterTileClassifier(IniDocument? theaterIni)
-    {
-        if (theaterIni == null) return;
-        var gen = theaterIni.GetSection("General");
-        int waterSet = gen?.GetInt("WaterSet", 21) ?? 21;
-        int rampBase = gen?.GetInt("RampBase", 9) ?? 9;
-        int slopePieces = gen?.GetInt("SlopeSetPieces", -1) ?? -1;
-        int slopePieces2 = gen?.GetInt("SlopeSetPieces2", -1) ?? -1;
-        int cliffSet = gen?.GetInt("CliffSet", 10) ?? 10;
-        int waterCliffs = gen?.GetInt("WaterCliffs", -1) ?? -1;
-        int shorePieces = gen?.GetInt("ShorePieces", 12) ?? 12;
-        int pavedRoads = gen?.GetInt("PavedRoads", 20) ?? 20;
-
-        int runningTileIdx = 0;
-        for (int setIdx = 0; setIdx < 500 && runningTileIdx < _tileTerrain.Length; setIdx++)
-        {
-            var sec = theaterIni.GetSection($"TileSet{setIdx:D4}");
-            if (sec == null) break;
-
-            int count = Math.Max(0, sec.GetInt("TilesInSet", 0));
-            string setName = (sec.GetString("SetName", "") ?? "").ToLowerInvariant();
-
-            bool isRamp = setIdx == rampBase || setIdx == slopePieces || setIdx == slopePieces2 || setName.Contains("ramp") || setName.Contains("slope");
-            int terrain = 0;
-            if (setIdx == waterSet || (setName.Contains("water") && !setName.Contains("cliff") && !setName.Contains("bridge")))
-                terrain = 2; // Water
-            else if (setIdx == cliffSet || setIdx == waterCliffs || setName.Contains("cliff"))
-                terrain = 3; // Cliff/Rock
-            else if (setIdx == shorePieces || setName.Contains("shore"))
-                terrain = 4; // Beach/Shore
-            else if (setIdx == pavedRoads || setName.Contains("road") || setName.Contains("bridge") || setName.Contains("pave"))
-                terrain = 1; // Road
-
-            for (int t = 0; t < count && runningTileIdx < _tileTerrain.Length; t++, runningTileIdx++)
-            {
-                _tileTerrain[runningTileIdx] = terrain;
-                _tileIsRamp[runningTileIdx] = isRamp;
-            }
-        }
-    }
-
-    public (int TerrainType, int RampType) Classify(int tileNum)
-    {
-        if (tileNum < 0 || tileNum >= _tileTerrain.Length) return (0, 0);
-        return (_tileTerrain[tileNum], _tileIsRamp[tileNum] ? 1 : 0);
-    }
+    public required MapBundleData Bundle { get; init; }
+    public Rgba32[]? BakedTerrainPixels { get; init; }
+    public int BakedTerrainW { get; init; }
+    public int BakedTerrainH { get; init; }
+    public Rgba32[]? PreviewPixels { get; init; }
+    public int PreviewW { get; init; }
+    public int PreviewH { get; init; }
 }
 
 public static class Ra2MapExtractor
 {
-    public static (MapBundleData? Map, Rgba32[]? PreviewPixels, int PreviewW, int PreviewH) TryExtractFullMap(
+    private readonly record struct RawIsoTile(short Rx, short Ry, int TileIndex, byte SubTile, byte Level);
+
+    public static ExtractedRa2MapResult? TryExtractFullMap(
         string mapId,
         string displayName,
         byte[] mapIniBytes,
-        Dictionary<string, TheaterTileClassifier> theaterClassifiers)
+        Dictionary<string, TheaterTilesetAtlas> theaterAtlases,
+        IniDocument? rulesIni = null,
+        IniDocument? artIni = null,
+        Dictionary<string, string>? csf = null)
     {
         var ini = IniDocument.Parse(mapIniBytes);
         var mapSec = ini.GetSection("Map");
-        if (mapSec == null) return (null, null, 0, 0);
+        if (mapSec == null) return null;
 
         string theater = (mapSec.GetString("Theater", "TEMPERATE") ?? "TEMPERATE").Trim().ToUpperInvariant();
         var sizeParts = mapSec.GetCsvList("Size");
         var localParts = mapSec.GetCsvList("LocalSize");
-        if (sizeParts.Count < 4 || localParts.Count < 4) return (null, null, 0, 0);
+        if (sizeParts.Count < 4 || localParts.Count < 4) return null;
 
-        int fullW = Math.Max(20, int.TryParse(sizeParts[2], out int fw) ? fw : 64);
-        int fullH = Math.Max(20, int.TryParse(sizeParts[3], out int fh) ? fh : 64);
+        int fullW = Math.Max(16, int.TryParse(sizeParts[2], out int fw) ? fw : 64);
+        int fullH = Math.Max(16, int.TryParse(sizeParts[3], out int fh) ? fh : 64);
         int localLeft = Math.Max(0, int.TryParse(localParts[0], out int ll) ? ll : 2);
         int localTop = Math.Max(0, int.TryParse(localParts[1], out int lt) ? lt : 4);
-        int localW = Math.Clamp(int.TryParse(localParts[2], out int lw) ? lw : 64, 32, 128);
-        int localH = Math.Clamp(int.TryParse(localParts[3], out int lh) ? lh : 64, 32, 128);
+        int localW = Math.Clamp(int.TryParse(localParts[2], out int lw) ? lw : 64, 16, 220);
+        int localH = Math.Clamp(int.TryParse(localParts[3], out int lh) ? lh : 64, 16, 220);
 
-        theaterClassifiers.TryGetValue(theater, out var classifier);
-        classifier ??= theaterClassifiers.GetValueOrDefault("TEMPERATE");
+        theaterAtlases.TryGetValue(theater, out var atlas);
+        atlas ??= theaterAtlases.GetValueOrDefault("TEMPERATE");
 
-        // Allocate dense playable grid [localW, localH]
-        var grid = new MapCellData[localW, localH];
-        var visited = new bool[localW, localH];
-        for (int y = 0; y < localH; y++)
-        {
-            for (int x = 0; x < localW; x++)
-            {
-                grid[x, y] = new MapCellData { X = x, Y = y, HeightLevel = 2, TerrainType = 0 };
-            }
-        }
+        // Playable screen diamond bounds (dx in [dxMinPlay..dxMaxPlay], dy in [dyMinPlay..dyMaxPlay])
+        int dxMinPlay = 2 * localLeft;
+        int dxMaxPlay = 2 * (localLeft + localW) - 1;
+        int dyMinPlay = 2 * localTop;
+        int dyMaxPlay = 2 * (localTop + localH) + 3;
 
-        // Coordinate projection helper: RA2 isometric (rx, ry) -> playable rectangular (gx, gy)
-        bool ProjectRxRy(int rx, int ry, out int gx, out int gy)
-        {
-            int u = ((rx - ry + fullW - 1) / 2) - localLeft;
-            int vScreen = ((rx + ry - fullW - 1) / 2) - localTop;
-            gx = u;
-            gy = (localH - 1) - vScreen; // Flip vertical so North in RA2 is +Z in Unity!
-            return gx >= 0 && gx < localW && gy >= 0 && gy < localH;
-        }
+        // Margin for visual border around playable area
+        const int margin = 4;
+        var rawTiles = new List<RawIsoTile>(16384);
+        int minRx = int.MaxValue, maxRx = int.MinValue;
+        int minRy = int.MaxValue, maxRy = int.MinValue;
 
-        // 1. Decode [IsoMapPack5] (LZO1X-1 compressed 11-byte isometric tile records)
         var isoSec = ini.GetSection("IsoMapPack5");
         if (isoSec != null && isoSec.OrderedEntries.Count > 0)
         {
-            byte[] packed = DecodeBase64Section(isoSec);
-            byte[] unpacked = UnpackChunks(packed, useFormat80: false);
+            byte[] unpacked = UnpackChunks(DecodeBase64Section(isoSec), useFormat80: false);
             int recCount = unpacked.Length / 11;
             for (int i = 0; i < recCount; i++)
             {
                 int off = i * 11;
                 short rx = BinaryPrimitives.ReadInt16LittleEndian(unpacked.AsSpan(off, 2));
                 short ry = BinaryPrimitives.ReadInt16LittleEndian(unpacked.AsSpan(off + 2, 2));
-                short tileNum = BinaryPrimitives.ReadInt16LittleEndian(unpacked.AsSpan(off + 4, 2));
-                byte zHeight = unpacked[off + 9];
+                if (rx == 0 && ry == 0) continue;
 
-                if (!ProjectRxRy(rx, ry, out int gx, out int gy)) continue;
+                int tileIdx = BinaryPrimitives.ReadInt32LittleEndian(unpacked.AsSpan(off + 4, 4));
+                byte subTile = unpacked[off + 8];
+                byte level = unpacked[off + 9];
 
-                var cell = grid[gx, gy];
-                int hLvl = Math.Clamp(zHeight / 2 + 1, 1, 12);
-                if (classifier != null)
-                {
-                    var (terr, ramp) = classifier.Classify(tileNum);
-                    if (ramp != 0)
-                    {
-                        cell.RampType = 1;
-                        cell.HeightLevel = visited[gx, gy] ? (cell.HeightLevel + hLvl) / 2 : hLvl;
-                        if (cell.TerrainType == 3) cell.TerrainType = 0;
-                    }
-                    else if (!visited[gx, gy] || cell.RampType == 0)
-                    {
-                        cell.HeightLevel = hLvl;
-                        cell.TerrainType = terr;
-                    }
-                    if (terr == 2 && cell.RampType == 0) cell.HeightLevel = 1;
-                }
-                else
-                {
-                    cell.HeightLevel = hLvl;
-                }
-                visited[gx, gy] = true;
-            }
+                int dx = rx - ry + fullW - 1;
+                int dy = rx + ry - fullW - 1 - level;
+                if (dx < dxMinPlay - margin || dx > dxMaxPlay + margin || dy < dyMinPlay - margin || dy > dyMaxPlay + margin + 8)
+                    continue;
 
-            // Fill unvisited diamond-parity neighbor cells so rectangular 3D grid has zero holes!
-            for (int pass = 0; pass < 2; pass++)
-            {
-                for (int y = 0; y < localH; y++)
+                rawTiles.Add(new RawIsoTile(rx, ry, tileIdx, subTile, level));
+                if (dx >= dxMinPlay && dx <= dxMaxPlay && dy >= dyMinPlay && dy <= dyMaxPlay)
                 {
-                    for (int x = 0; x < localW; x++)
-                    {
-                        if (visited[x, y]) continue;
-                        MapCellData? donor =
-                            (x > 0 && visited[x - 1, y]) ? grid[x - 1, y] :
-                            (x + 1 < localW && visited[x + 1, y]) ? grid[x + 1, y] :
-                            (y > 0 && visited[x, y - 1]) ? grid[x, y - 1] :
-                            (y + 1 < localH && visited[x, y + 1]) ? grid[x, y + 1] : null;
-                        if (donor != null)
-                        {
-                            grid[x, y].HeightLevel = donor.HeightLevel;
-                            grid[x, y].TerrainType = donor.TerrainType;
-                            grid[x, y].RampType = donor.RampType;
-                            visited[x, y] = true;
-                        }
-                    }
-                }
-            }
-
-            // Mark non-cliff height transitions (dh <= 2) as navigable slopes while keeping CliffSet (TerrainType==3) blocked!
-            for (int y = 1; y < localH - 1; y++)
-            {
-                for (int x = 1; x < localW - 1; x++)
-                {
-                    var c = grid[x, y];
-                    if (c.TerrainType == 2 || c.TerrainType == 3) continue;
-                    int h = c.HeightLevel;
-                    int dL = grid[x - 1, y].TerrainType == 3 ? 0 : Math.Abs(grid[x - 1, y].HeightLevel - h);
-                    int dR = grid[x + 1, y].TerrainType == 3 ? 0 : Math.Abs(grid[x + 1, y].HeightLevel - h);
-                    int dD = grid[x, y - 1].TerrainType == 3 ? 0 : Math.Abs(grid[x, y - 1].HeightLevel - h);
-                    int dU = grid[x, y + 1].TerrainType == 3 ? 0 : Math.Abs(grid[x, y + 1].HeightLevel - h);
-                    if ((dL >= 1 && dL <= 2) || (dR >= 1 && dR <= 2) || (dD >= 1 && dD <= 2) || (dU >= 1 && dU <= 2))
-                    {
-                        c.RampType = 1;
-                    }
+                    if (rx < minRx) minRx = rx;
+                    if (rx > maxRx) maxRx = rx;
+                    if (ry < minRy) minRy = ry;
+                    if (ry > maxRy) maxRy = ry;
                 }
             }
         }
 
-        // 2. Decode [OverlayPack] & [OverlayDataPack] (Format80 LCW 512x512 arrays for Gold Ore & Gems!)
+        if (minRx > maxRx || minRy > maxRy)
+        {
+            minRx = 1; maxRx = 64; minRy = 1; maxRy = 64;
+        }
+
+        int gridW = maxRx - minRx + 1;
+        int gridH = maxRy - minRy + 1;
+        var grid = new MapCellData[gridW, gridH];
+
+        for (int gy = 0; gy < gridH; gy++)
+        {
+            for (int gx = 0; gx < gridW; gx++)
+            {
+                int rx = gx + minRx;
+                int ry = maxRy - gy;
+                int dx = rx - ry + fullW - 1;
+                int dy = rx + ry - fullW - 1;
+                bool inPlayable = dx >= dxMinPlay && dx <= dxMaxPlay && dy >= dyMinPlay - 2 && dy <= dyMaxPlay + 6;
+
+                grid[gx, gy] = new MapCellData
+                {
+                    X = gx,
+                    Y = gy,
+                    HeightLevel = 0,
+                    RampType = 0,
+                    TerrainType = inPlayable ? 0 : 6 // 6 = OutOfBounds outside playable rectangle!
+                };
+            }
+        }
+
+        bool RxRyToGrid(int rx, int ry, out int gx, out int gy)
+        {
+            gx = rx - minRx;
+            gy = maxRy - ry;
+            return gx >= 0 && gx < gridW && gy >= 0 && gy < gridH;
+        }
+
+        // Populate exact 1:1 cells from [IsoMapPack5] + .TMP sub-tile LandType & RampType!
+        foreach (var t in rawTiles)
+        {
+            if (!RxRyToGrid(t.Rx, t.Ry, out int gx, out int gy)) continue;
+
+            var cell = grid[gx, gy];
+            int dx = t.Rx - t.Ry + fullW - 1;
+            int dy = t.Rx + t.Ry - fullW - 1 - t.Level;
+            bool inPlayable = dx >= dxMinPlay && dx <= dxMaxPlay && dy >= dyMinPlay && dy <= dyMaxPlay;
+
+            cell.HeightLevel = t.Level;
+            if (!inPlayable)
+            {
+                cell.TerrainType = 6; // OutOfBounds outside LocalSize!
+                if (atlas != null && atlas.GetSubTile(t.TileIndex, t.SubTile) is { } borderSub)
+                    cell.RampType = borderSub.RampType;
+                continue;
+            }
+
+            if (atlas != null && atlas.GetSubTile(t.TileIndex, t.SubTile) is { } sub)
+            {
+                cell.RampType = sub.RampType;
+                cell.TerrainType = MapWestwoodLandType(sub.LandType);
+                if (atlas.IsBridgeTemplate(t.TileIndex))
+                {
+                    cell.TerrainType = 1;
+                    cell.HasBridge = true;
+                }
+            }
+            else
+            {
+                cell.TerrainType = 0;
+                cell.RampType = 0;
+            }
+        }
+
+        // Bake 100% Pixel-Exact Original RA2 .TMP Ground & Cliff Texture!
+        Rgba32[]? bakedPixels = null;
+        int bakedW = 0, bakedH = 0, originPx = 0, originPy = 0;
+        if (atlas != null && rawTiles.Count > 0)
+        {
+            originPx = (dxMinPlay - 2) * 30;
+            originPy = (dyMinPlay - 6) * 15;
+            bakedW = (localW + 2) * 60;
+            bakedH = (localH + 8) * 30;
+
+            // Bake full 60x30/tile .TMP canvas (supports maps up to 8192px, downsampling 2x only if > 4096px)
+            if (bakedW <= 12288 && bakedH <= 12288)
+            {
+                int rawW = bakedW, rawH = bakedH;
+                var rawCanvas = new Rgba32[rawW * rawH];
+                var bgCol = atlas.GetSubTile(0, 0)?.RadarColorLeft ?? new Rgba32(48, 72, 36, 255);
+                Array.Fill(rawCanvas, bgCol);
+
+                var palColors = atlas.Palette.Colors;
+                foreach (var t in rawTiles.OrderBy(x => x.Rx + x.Ry).ThenBy(x => x.Level))
+                {
+                    var sub = atlas.GetSubTile(t.TileIndex, t.SubTile);
+                    if (sub == null) continue;
+
+                    int tileLeft = (t.Rx - t.Ry + fullW) * 30 - 30 - originPx;
+                    int tileTop = (t.Rx + t.Ry - fullW - 1 - t.Level) * 15 - originPy;
+
+                    BlitIndexed(sub.IsoPixels, 60, 30, tileLeft, tileTop, rawCanvas, rawW, rawH, palColors);
+
+                    if (sub.HasExtra && sub.ExtraPixels != null)
+                    {
+                        int exLeft = tileLeft + (sub.ExtraX - sub.X);
+                        int exTop = tileTop + (sub.ExtraY - sub.Y);
+                        BlitIndexed(sub.ExtraPixels, sub.ExtraWidth, sub.ExtraHeight, exLeft, exTop, rawCanvas, rawW, rawH, palColors);
+                    }
+                }
+
+                if (rawW > 4096 || rawH > 4096)
+                {
+                    int dsW = rawW / 2, dsH = rawH / 2;
+                    var ds = new Rgba32[dsW * dsH];
+                    for (int y = 0; y < dsH; y++)
+                    {
+                        int sy = y * 2 * rawW;
+                        for (int x = 0; x < dsW; x++)
+                        {
+                            ds[y * dsW + x] = rawCanvas[sy + x * 2];
+                        }
+                    }
+                    bakedPixels = ds;
+                }
+                else
+                {
+                    bakedPixels = rawCanvas;
+                }
+            }
+        }
+
+        // Snapshot base ground levels before applying high-bridge +4 offsets
+        var baseLevels = new int[gridW, gridH];
+        for (int gy = 0; gy < gridH; gy++)
+            for (int gx = 0; gx < gridW; gx++)
+                baseLevels[gx, gy] = grid[gx, gy].HeightLevel;
+
+        // 2. Decode [OverlayPack] & [OverlayDataPack] (Gold Ore, Gems, High/Low Bridges, Walls!)
+        var props = new List<MapPropData>();
         var ovSec = ini.GetSection("OverlayPack");
         var ovDataSec = ini.GetSection("OverlayDataPack");
-        int totalOrePlaced = 0;
         if (ovSec != null && ovSec.OrderedEntries.Count > 0)
         {
             byte[] ovTypes = UnpackChunks(DecodeBase64Section(ovSec), useFormat80: true);
@@ -213,48 +251,138 @@ public static class Ra2MapExtractor
 
                 int rx = idx % 512;
                 int ry = idx / 512;
-                if (!ProjectRxRy(rx, ry, out int gx, out int gy)) continue;
+                if (!RxRyToGrid(rx, ry, out int gx, out int gy)) continue;
 
-                bool isBridge = (ov >= 24 && ov <= 26)
-                    || (ov >= 59 && ov <= 60)
-                    || (ov >= 74 && ov <= 101)
-                    || (ov >= 122 && ov <= 125)
-                    || (ov >= 233 && ov <= 238);
+                var cell = grid[gx, gy];
+                if (cell.TerrainType == 6) continue;
 
-                if (isBridge)
+                bool isHighBridge = (ov >= 24 && ov <= 26) || (ov >= 237 && ov <= 238);
+                bool isLowBridge = (ov >= 59 && ov <= 60) || (ov >= 74 && ov <= 101) || (ov >= 122 && ov <= 125) || (ov >= 233 && ov <= 236);
+
+                if (isHighBridge || isLowBridge)
                 {
-                    // Stamp continuous 2x2 road/bridge deck so diagonal bridges never leave 4-neighbor water gaps!
-                    for (int by = 0; by <= 1; by++)
+                    int deckLevel = isHighBridge ? baseLevels[gx, gy] + 4 : baseLevels[gx, gy];
+                    for (int dy = -1; dy <= 1; dy++)
                     {
-                        for (int bx = 0; bx <= 1; bx++)
+                        for (int dx = -1; dx <= 1; dx++)
                         {
-                            int bgx = Math.Clamp(gx + bx, 0, localW - 1);
-                            int bgy = Math.Clamp(gy + by, 0, localH - 1);
-                            grid[bgx, bgy].TerrainType = 1;
-                            grid[bgx, bgy].RampType = 1;
-                            grid[bgx, bgy].HeightLevel = Math.Max(2, grid[bgx, bgy].HeightLevel);
+                            int bgx = gx + dx, bgy = gy + dy;
+                            if (bgx < 0 || bgx >= gridW || bgy < 0 || bgy >= gridH) continue;
+                            var bc = grid[bgx, bgy];
+                            if (bc.TerrainType == 6) continue;
+                            bc.HasBridge = true;
+                            bc.TerrainType = 1; // Road
+                            bc.RampType = 0;
+                            bc.HeightLevel = Math.Max(bc.HeightLevel, deckLevel);
                         }
                     }
                     continue;
                 }
 
-                int oreType = 0;
                 if (ov >= 27 && ov <= 38)
-                    oreType = 2; // GEM01..GEM12 High-value Purple Gems!
+                {
+                    int stage = idx < ovData.Length ? ovData[idx] : 8;
+                    cell.OreType = 2; // Gems
+                    cell.OreAmount = Math.Clamp(stage + 1, 4, 12);
+                }
                 else if ((ov >= 102 && ov <= 121) || (ov >= 127 && ov <= 166))
-                    oreType = 1; // TIB01..TIB20 & TIB2/TIB3 Gold Ore!
-
-                if (oreType > 0 && grid[gx, gy].TerrainType != 2 && grid[gx, gy].TerrainType != 3)
                 {
                     int stage = idx < ovData.Length ? ovData[idx] : 6;
-                    grid[gx, gy].OreType = oreType;
-                    grid[gx, gy].OreAmount = Math.Clamp(stage + 2, 5, 12);
-                    totalOrePlaced++;
+                    cell.OreType = 1; // Gold Ore
+                    cell.OreAmount = Math.Clamp(stage + 1, 4, 12);
+                }
+                else if (ov <= 23 || (ov >= 167 && ov <= 179))
+                {
+                    // Walls / Sandbags / Fences / Rocks
+                    props.Add(new MapPropData { TypeId = $"WALL_{ov}", X = gx, Y = gy, Kind = 3 });
+                }
+            }
+
+            // Open cliff bridgehead abutments where a bridge meets a cliff edge within 2 height levels
+            for (int gy = 1; gy < gridH - 1; gy++)
+            {
+                for (int gx = 1; gx < gridW - 1; gx++)
+                {
+                    var c = grid[gx, gy];
+                    if (c.TerrainType != 3) continue; // Only check Rock/Cliff cells
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            var nb = grid[gx + dx, gy + dy];
+                            if (nb.HasBridge && Math.Abs(nb.HeightLevel - c.HeightLevel) <= 2)
+                            {
+                                c.TerrainType = 1;
+                                c.HasBridge = true;
+                                break;
+                            }
+                        }
+                        if (c.HasBridge) break;
+                    }
                 }
             }
         }
 
-        // 3. Extract [Waypoints] (0..7 are multiplayer start positions: value = ry * 1000 + rx)
+        // 3. Parse [Terrain] section (Trees TREE01..28, Blossom Trees TIBTRE01..03, Urban Streetlights LT/TRFF!)
+        var terrSec = ini.GetSection("Terrain");
+        if (terrSec != null)
+        {
+            foreach (var kv in terrSec.OrderedEntries)
+            {
+                if (!int.TryParse(kv.Key.Trim(), out int encoded) || encoded <= 0) continue;
+                int ry = encoded / 1000;
+                int rx = encoded % 1000;
+                if (!RxRyToGrid(rx, ry, out int gx, out int gy)) continue;
+                if (grid[gx, gy].TerrainType == 6) continue;
+
+                string tid = kv.Value.Split(',')[0].Trim().ToUpperInvariant();
+                byte kind = tid.StartsWith("TIBTRE") ? (byte)1
+                    : (tid.StartsWith("LT") || tid.StartsWith("TRFF") || tid.StartsWith("SIGN") || tid.StartsWith("POLE")) ? (byte)2
+                    : (byte)0;
+                props.Add(new MapPropData { TypeId = tid, X = gx, Y = gy, Kind = kind });
+            }
+        }
+
+        // 4. Parse [Structures] section (Pre-placed Civilian Buildings, Alamo Fort, Tech Oil Derricks, Hospitals!)
+        var preStructures = new List<MapStructureData>();
+        var strSec = ini.GetSection("Structures");
+        if (strSec != null)
+        {
+            foreach (var kv in strSec.OrderedEntries)
+            {
+                string[] parts = kv.Value.Split(',');
+                if (parts.Length < 5) continue;
+                string typeId = parts[1].Trim().ToUpperInvariant();
+                if (!int.TryParse(parts[3].Trim(), out int rx) || !int.TryParse(parts[4].Trim(), out int ry))
+                    continue;
+
+                var (fwSize, fhSize) = LookupFoundation(typeId, rulesIni, artIni);
+                // Note: In RA2, structure top-left is (rx, ry), spanning [rx..rx+fw-1, ry..ry+fh-1].
+                // Since gy = maxRy - ry decreases as ry increases, the minimum gy of [ry..ry+fh-1] is maxRy - (ry + fh - 1)!
+                int gx = rx - minRx;
+                int gyBottom = maxRy - (ry + fhSize - 1);
+                if (gx < 0 || gyBottom < 0 || gx + fwSize > gridW || gyBottom + fhSize > gridH) continue;
+
+                int maxHp = rulesIni?.GetSection(typeId)?.GetInt("Strength", 800) ?? 800;
+                string uiKey = rulesIni?.GetSection(typeId)?.GetString("UIName", "") ?? "";
+                string locName = (!string.IsNullOrEmpty(uiKey) && csf != null && csf.TryGetValue(uiKey, out string? n) && !string.IsNullOrWhiteSpace(n))
+                    ? n!
+                    : (rulesIni?.GetSection(typeId)?.GetString("Name", typeId) ?? typeId);
+
+                preStructures.Add(new MapStructureData
+                {
+                    TypeId = typeId,
+                    Name = locName,
+                    X = gx,
+                    Y = gyBottom,
+                    FootprintX = fwSize,
+                    FootprintY = fhSize,
+                    MaxHp = Math.Max(200, maxHp)
+                });
+            }
+        }
+
+        // 5. Extract [Waypoints] (0..7 are official multiplayer starting locations)
         var waypoints = new List<WaypointData>();
         var wpSec = ini.GetSection("Waypoints");
         if (wpSec != null)
@@ -267,13 +395,13 @@ public static class Ra2MapExtractor
 
                 int ry = encoded / 1000;
                 int rx = encoded % 1000;
-                if (ProjectRxRy(rx, ry, out int gx, out int gy))
+                if (RxRyToGrid(rx, ry, out int gx, out int gy))
                 {
                     waypoints.Add(new WaypointData
                     {
                         Index = wpIdx,
-                        X = Math.Clamp(gx, 6, localW - 8),
-                        Y = Math.Clamp(gy, 6, localH - 8)
+                        X = Math.Clamp(gx, 4, gridW - 6),
+                        Y = Math.Clamp(gy, 4, gridH - 6)
                     });
                 }
             }
@@ -282,29 +410,11 @@ public static class Ra2MapExtractor
         if (waypoints.Count < 2)
         {
             waypoints.Clear();
-            waypoints.Add(new WaypointData { Index = 0, X = 10, Y = 10 });
-            waypoints.Add(new WaypointData { Index = 1, X = localW - 12, Y = localH - 12 });
+            waypoints.Add(new WaypointData { Index = 0, X = gridW / 4, Y = gridH / 2 });
+            waypoints.Add(new WaypointData { Index = 1, X = (gridW * 3) / 4, Y = gridH / 2 });
         }
 
-        // Ensure natural ore exists if map used oil derricks only
-        if (totalOrePlaced < 12)
-        {
-            foreach (var wp in waypoints)
-            {
-                int ox = Math.Clamp(wp.X + (wp.X < localW / 2 ? 9 : -9), 4, localW - 5);
-                int oy = Math.Clamp(wp.Y, 4, localH - 5);
-                for (int dy = -2; dy <= 2; dy++)
-                {
-                    for (int dx = -2; dx <= 2; dx++)
-                    {
-                        var c = grid[Math.Clamp(ox + dx, 0, localW - 1), Math.Clamp(oy + dy, 0, localH - 1)];
-                        if (c.TerrainType == 0) { c.OreType = 1; c.OreAmount = 9; }
-                    }
-                }
-            }
-        }
-
-        // 4. Decode [Preview] + [PreviewPack] official RGB24 minimap thumbnail!
+        // 6. Decode [Preview] + [PreviewPack] official RGB24 minimap thumbnail
         Rgba32[]? previewRgba = null;
         int prevW = 0, prevH = 0;
         var prevSec = ini.GetSection("Preview");
@@ -331,20 +441,108 @@ public static class Ra2MapExtractor
             MapId = mapId,
             DisplayName = displayName,
             Theater = theater,
-            Width = localW,
-            Height = localH,
+            IsNativeIsometricGrid = true,
+            Width = gridW,
+            Height = gridH,
+            MinRx = minRx,
+            MaxRx = maxRx,
+            MinRy = minRy,
+            MaxRy = maxRy,
+            FullMapWidth = fullW,
+            LocalLeft = localLeft,
+            LocalTop = localTop,
+            LocalWidth = localW,
+            LocalHeight = localH,
+            BakedTerrainTextureRelPath = bakedPixels != null ? $"terrain_tex/{mapId}_terrain.png" : "",
+            BakedTexWidth = bakedW,
+            BakedTexHeight = bakedH,
+            BakedOriginPx = originPx,
+            BakedOriginPy = originPy,
             Waypoints = waypoints,
-            Cells = new List<MapCellData>(localW * localH)
+            Cells = new List<MapCellData>(gridW * gridH),
+            Props = props,
+            PreplacedStructures = preStructures
         };
-        for (int y = 0; y < localH; y++)
+
+        for (int gy = 0; gy < gridH; gy++)
         {
-            for (int x = 0; x < localW; x++)
+            for (int gx = 0; gx < gridW; gx++)
             {
-                bundle.Cells.Add(grid[x, y]);
+                bundle.Cells.Add(grid[gx, gy]);
             }
         }
 
-        return (bundle, previewRgba, prevW, prevH);
+        return new ExtractedRa2MapResult
+        {
+            Bundle = bundle,
+            BakedTerrainPixels = bakedPixels,
+            BakedTerrainW = bakedW,
+            BakedTerrainH = bakedH,
+            PreviewPixels = previewRgba,
+            PreviewW = prevW,
+            PreviewH = prevH
+        };
+    }
+
+    private static int MapWestwoodLandType(byte landType)
+    {
+        return landType switch
+        {
+            0 or 1 or 2 or 3 or 4 or 13 => 0, // Clear / Ice (Passable)
+            5 or 6 or 11 or 12 => 1,          // Road / Tunnel / Rail
+            9 => 2,                           // Water
+            7 or 8 or 15 => 3,                // Rock / Impassable / Cliff
+            10 => 4,                          // Beach / Shore
+            14 => 5,                          // Rough (Passable, Not Buildable)
+            _ => 0
+        };
+    }
+
+    private static (int W, int H) LookupFoundation(string typeId, IniDocument? rulesIni, IniDocument? artIni)
+    {
+        string artId = rulesIni?.GetSection(typeId)?.GetString("Image", typeId) ?? typeId;
+        string? found = artIni?.GetSection(artId)?.GetString("Foundation")
+            ?? artIni?.GetSection(typeId)?.GetString("Foundation");
+        if (!string.IsNullOrWhiteSpace(found))
+        {
+            string[] parts = found!.ToLowerInvariant().Split('x');
+            if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h))
+            {
+                return (Math.Clamp(w, 1, 8), Math.Clamp(h, 1, 8));
+            }
+        }
+        return (2, 2);
+    }
+
+    private static void BlitIndexed(
+        byte[] srcIndices,
+        int srcW,
+        int srcH,
+        int dstLeft,
+        int dstTop,
+        Rgba32[] canvas,
+        int canvasW,
+        int canvasH,
+        Rgba32[] pal)
+    {
+        int yStart = Math.Max(0, -dstTop);
+        int yEnd = Math.Min(srcH, canvasH - dstTop);
+        int xStart = Math.Max(0, -dstLeft);
+        int xEnd = Math.Min(srcW, canvasW - dstLeft);
+
+        for (int y = yStart; y < yEnd; y++)
+        {
+            int srcRow = y * srcW;
+            int dstRow = (dstTop + y) * canvasW + dstLeft;
+            for (int x = xStart; x < xEnd; x++)
+            {
+                byte idx = srcIndices[srcRow + x];
+                if (idx != 0)
+                {
+                    canvas[dstRow + x] = pal[idx];
+                }
+            }
+        }
     }
 
     private static byte[] DecodeBase64Section(IniSection sec)
@@ -361,7 +559,7 @@ public static class Ra2MapExtractor
         }
     }
 
-    private static byte[] UnpackChunks(ReadOnlySpan<byte> packed, bool useFormat80)
+    public static byte[] UnpackChunks(ReadOnlySpan<byte> packed, bool useFormat80)
     {
         using var ms = new MemoryStream();
         int pos = 0;

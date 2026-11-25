@@ -155,10 +155,13 @@ namespace ReCnc.Unity.View
             TerrainBuilder = terrainGo.AddComponent<Terrain3DBuilder>();
             TerrainBuilder.BuildTerrain(Simulation.Map);
 
-            // Jump camera to player's starting MCV
+            // Jump camera to player's starting MCV & align to authentic RA2 -45 deg isometric yaw
             var camCtrl = FindObjectOfType<RtsCamera3DController>();
             if (camCtrl != null)
             {
+                camCtrl.DefaultYawDegrees = Simulation.Map.IsNativeIsometricGrid ? -45f : 45f;
+                camCtrl.YawDegrees = camCtrl.DefaultYawDegrees;
+                camCtrl.PitchDegrees = 36f;
                 camCtrl.WorldMaxBounds = new Vector2(Simulation.Map.Width * WorldCoords.CellSize - 2f, Simulation.Map.Height * WorldCoords.CellSize - 2f);
                 for (int i = 0; i < Simulation.Entities.Count; i++)
                 {

@@ -1,0 +1,7 @@
+﻿<Solution>
+  <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="ReCnc.Unity.Runtime.csproj" />
+  <Project Path="ReCnc.Core.csproj" />
+  <Project Path="ReCnc.Unity.Editor.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
+</Solution>

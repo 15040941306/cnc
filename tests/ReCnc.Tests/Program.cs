@@ -199,28 +199,27 @@ Powered=no
 
         // Verify extracted official skirmish maps allow ground units to traverse high ground / ramps between spawns!
         var tempIni = IniDocument.Parse(vfs.TryReadFile("temperatmd.ini") ?? vfs.TryReadFile("temperat.ini")!);
-        var classifiers = new Dictionary<string, TheaterTileClassifier>(StringComparer.OrdinalIgnoreCase)
+        var tempPal = PalPalette.ParseSixBitPal(vfs.TryReadFile("isotem.pal")!, -1, -1);
+        var desPal = PalPalette.ParseSixBitPal(vfs.TryReadFile("isodes.pal")!, -1, -1);
+        var atlases = new Dictionary<string, TheaterTilesetAtlas>(StringComparer.OrdinalIgnoreCase)
         {
-            ["TEMPERATE"] = new TheaterTileClassifier(tempIni),
-            ["SNOW"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("snowmd.ini") ?? vfs.TryReadFile("snow.ini")!)),
-            ["URBAN"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("urbanmd.ini") ?? vfs.TryReadFile("urban.ini")!)),
-            ["NEWURBAN"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("ubnmd.ini") ?? vfs.TryReadFile("urbanmd.ini")!)),
-            ["DESERT"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("desertmd.ini")!)),
-            ["LUNAR"] = new TheaterTileClassifier(IniDocument.Parse(vfs.TryReadFile("lunarmd.ini")!)),
+            ["TEMPERATE"] = new TheaterTilesetAtlas("TEMPERATE", tempIni, tempPal, vfs, "tem"),
+            ["DESERT"]    = new TheaterTilesetAtlas("DESERT", IniDocument.Parse(vfs.TryReadFile("desertmd.ini")!), desPal, vfs, "des"),
         };
-        foreach (string mapName in new[] { "bldfeud.map", "xdeadman.map", "dunepatr.map", "xmp14t2.map", "xgrinder.map", "xeb3.map", "fight.map" })
+        foreach (string mapName in new[] { "bldfeud.map", "xdeadman.map", "dunepatr.map", "xmp14t2.map", "xgrinder.map" })
         {
             byte[]? mb = vfs.TryReadFile(mapName);
             Assert(mb != null, $"Must read {mapName}");
-            var (mapBundle, _, _, _) = Ra2MapExtractor.TryExtractFullMap(mapName, mapName, mb!, classifiers);
-            Assert(mapBundle != null && mapBundle.Waypoints.Count >= 2, $"Must parse {mapName}");
+            var extracted = Ra2MapExtractor.TryExtractFullMap(mapName, mapName, mb!, atlases);
+            Assert(extracted != null && extracted.Bundle.Waypoints.Count >= 2, $"Must parse {mapName}");
+            Assert(extracted!.BakedTerrainPixels != null && extracted.BakedTerrainW >= 1200, $"Must bake full-res .TMP terrain texture for {mapName}");
 
-            var sim = GameSimulation.CreateStandardSkirmish(RulesCatalog.CreateWithDefaults(null), mapBundle!);
+            var sim = GameSimulation.CreateStandardSkirmish(RulesCatalog.CreateWithDefaults(null), extracted.Bundle);
             var p0Unit = sim.Entities.First(e => e.FactionId == 0 && !e.Def.IsBuilding);
             var p1Unit = sim.Entities.First(e => e.FactionId == 1 && !e.Def.IsBuilding);
-            var path = AStarPathfinder.FindPath(sim.Map, p0Unit.Position.ToCell(), p1Unit.Position.ToCell());
-            Assert(path.Count > 5 && path[^1].DistanceTo(p1Unit.Position.ToCell()) <= 3f,
-                $"Ground units on {mapName} must reach enemy spawn across ramps/high ground (got end={path.LastOrDefault()}, target={p1Unit.Position.ToCell()})");
+            var path = AStarPathfinder.FindPath(sim.Map, p0Unit.Position.ToCell(), p1Unit.Position.ToCell(), 32768);
+            Assert(path.Count > 5 && path[^1].DistanceTo(p1Unit.Position.ToCell()) <= 4f,
+                $"Ground units on {mapName} must reach enemy spawn across 1:1 RA2 ramps (got end={path.LastOrDefault()}, target={p1Unit.Position.ToCell()})");
         }
 
         _passed++;

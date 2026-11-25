@@ -161,6 +161,26 @@ namespace ReCnc.Unity.Editor
             }
         }
 
+        [MenuItem("ReCnc/4. 导入外部红警2地图文件 (Import .map / .yrm / .mpr)", priority = 40)]
+        public static void ImportExternalRa2MapFromDialog()
+        {
+            string selected = EditorUtility.OpenFilePanel("选择《红色警戒2 / 尤里的复仇》地图文件", "", "map,yrm,mpr");
+            if (string.IsNullOrEmpty(selected)) return;
+
+            if (TryInvokeConverterProcess("-- --map \"" + selected + "\""))
+            {
+                AssetDatabase.Refresh();
+                EditorUtility.DisplayDialog(
+                    "红警2地图导入成功",
+                    "已将地图 " + Path.GetFileName(selected) + " 1:1 烘焙转换并加入遭遇战地图列表顶部！\n\n进入运行模式 (Play) 即可在「创建遭遇战」界面首行直接选择游玩。",
+                    "确定");
+            }
+            else
+            {
+                EditorUtility.DisplayDialog("地图导入失败", "请查看 Console 日志确认 raw_assets 中存在红警2地貌 .mix 包。", "关闭");
+            }
+        }
+
         private static bool TryInvokeBlenderRemasterProcess()
         {
             string projectDir = Directory.GetCurrentDirectory();
@@ -208,7 +228,7 @@ namespace ReCnc.Unity.Editor
             }
         }
 
-        private static bool TryInvokeConverterProcess()
+        private static bool TryInvokeConverterProcess(string extraArgs = "")
         {
             string projectDir = Directory.GetCurrentDirectory();
             string repoRoot = Path.GetFullPath(Path.Combine(projectDir, "..", ".."));
@@ -235,10 +255,11 @@ namespace ReCnc.Unity.Editor
                 }
             }
 
+            string cmdArgs = "run --project \"" + converterProj + "\"" + (string.IsNullOrEmpty(extraArgs) ? "" : " " + extraArgs);
             var psi = new ProcessStartInfo
             {
                 FileName = dotnetExe,
-                Arguments = "run --project \"" + converterProj + "\"",
+                Arguments = cmdArgs,
                 WorkingDirectory = repoRoot,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

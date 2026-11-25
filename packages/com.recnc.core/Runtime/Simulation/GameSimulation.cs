@@ -88,6 +88,25 @@ namespace ReCnc.Core.Simulation
 
         private void ClearSpawnArea(CellCoord center, int radius)
         {
+            if (Map.IsNativeIsometricGrid)
+            {
+                // Official Westwood RA2 maps already have flat, balanced spawn clearings!
+                // Only clear tree/wall props in the immediate 4-cell radius so MCV deployment never collides with a tree.
+                for (int dy = -4; dy <= 4; dy++)
+                {
+                    for (int dx = -4; dx <= 4; dx++)
+                    {
+                        var cell = Map.GetCell(center.X + dx, center.Y + dy);
+                        if (cell != null)
+                        {
+                            cell.HasProp = false;
+                            cell.HasBlockingProp = false;
+                        }
+                    }
+                }
+                return;
+            }
+
             int baseHeight = 2;
             var centerCell = Map.GetCell(center);
             if (centerCell != null && centerCell.Terrain != TerrainKind.Water)

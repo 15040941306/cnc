@@ -572,7 +572,9 @@ namespace ReCnc.Unity.InputControl
             {
                 var m = maps[i];
                 string thBadge = FormatTheaterBadge(m.Theater);
-                string rowText = $"{thBadge} {m.DisplayName}  [{m.Width}x{m.Height}]";
+                int dispW = m.PlayableWidth > 0 ? m.PlayableWidth : m.Width;
+                int dispH = m.PlayableHeight > 0 ? m.PlayableHeight : m.Height;
+                string rowText = $"{thBadge} {m.DisplayName}  [{dispW}x{dispH}]";
                 GUIStyle btnStyle = (i == _selectedMapIndex) ? _tabActiveStyle : _tabBtnStyle;
                 if (GUILayout.Button(rowText, btnStyle, GUILayout.Height(28f)))
                 {

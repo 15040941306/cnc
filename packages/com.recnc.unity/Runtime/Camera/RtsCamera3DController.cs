@@ -5,11 +5,12 @@ namespace ReCnc.Unity.CameraControl
     public class RtsCamera3DController : MonoBehaviour
     {
         public Vector3 FocusPoint = new Vector3(24f, 1.4f, 24f);
-        public float Distance = 34f;
+        public float Distance = 38f;
         public float MinDistance = 12f;
-        public float MaxDistance = 78f;
-        public float YawDegrees = 45f;
-        public float PitchDegrees = 48f;
+        public float MaxDistance = 95f;
+        public float DefaultYawDegrees = -45f;
+        public float YawDegrees = -45f;
+        public float PitchDegrees = 36f;
         public float MoveSpeed = 28f;
         public float ZoomSpeed = 22f;
         public bool EnableEdgeScroll = false;
@@ -67,8 +68,8 @@ namespace ReCnc.Unity.CameraControl
             if (Input.GetKey(KeyCode.E)) YawDegrees += 75f * dt;
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                YawDegrees = 45f;
-                PitchDegrees = 48f;
+                YawDegrees = DefaultYawDegrees;
+                PitchDegrees = 36f;
             }
 
             if (Input.GetMouseButtonDown(2))

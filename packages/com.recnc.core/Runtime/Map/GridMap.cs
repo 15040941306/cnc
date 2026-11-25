@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using ReCnc.Core.Data;
 
 namespace ReCnc.Core.Map
@@ -87,7 +88,9 @@ namespace ReCnc.Core.Map
         Road = 1,
         Water = 2,
         Rock = 3,
-        Beach = 4
+        Beach = 4,
+        Rough = 5,
+        OutOfBounds = 6
     }
 
     public class GridCell
@@ -95,19 +98,23 @@ namespace ReCnc.Core.Map
         public int X;
         public int Y;
         public int HeightLevel;
-        public int RampType;
+        public int RampType; // 0..20 exact Westwood SlopeType
         public TerrainKind Terrain;
         public int OreType;    // 0 = none, 1 = gold, 2 = gem
         public int OreAmount;  // 0..12
+        public bool HasBridge;
+        public bool HasProp;         // Any [Terrain] prop (blocks building placement)
+        public bool HasBlockingProp; // Tree or Wall (also blocks ground vehicles)
         public int OccupiedByBuildingId; // 0 = empty
 
         public bool IsLandPassable
         {
             get
             {
-                return OccupiedByBuildingId == 0
-                    && Terrain != TerrainKind.Water
-                    && Terrain != TerrainKind.Rock;
+                if (OccupiedByBuildingId != 0 || HasBlockingProp) return false;
+                if (Terrain == TerrainKind.OutOfBounds || Terrain == TerrainKind.Rock) return false;
+                if (Terrain == TerrainKind.Water && !HasBridge) return false;
+                return true;
             }
         }
 
@@ -116,10 +123,21 @@ namespace ReCnc.Core.Map
             get
             {
                 return OccupiedByBuildingId == 0
+                    && !HasProp
+                    && !HasBridge
                     && RampType == 0
-                    && (Terrain == TerrainKind.Clear || Terrain == TerrainKind.Road)
+                    && (Terrain == TerrainKind.Clear || Terrain == TerrainKind.Road || Terrain == TerrainKind.Rough)
                     && OreAmount == 0;
             }
+        }
+
+        public void GetWorldCornerLevels(out int tl, out int tr, out int br, out int bl, out int split)
+        {
+            Ra2RampGeometry.GetCornerOffsets(RampType, out int otl, out int otr, out int obr, out int obl, out split);
+            tl = HeightLevel + otl;
+            tr = HeightLevel + otr;
+            br = HeightLevel + obr;
+            bl = HeightLevel + obl;
         }
     }
 
@@ -129,6 +147,24 @@ namespace ReCnc.Core.Map
         public readonly int Height;
         public readonly string DisplayName;
         public readonly string Theater;
+        public readonly bool IsNativeIsometricGrid;
+        public readonly int MinRx;
+        public readonly int MaxRx;
+        public readonly int MinRy;
+        public readonly int MaxRy;
+        public readonly int FullMapWidth;
+        public readonly int LocalLeft;
+        public readonly int LocalTop;
+        public readonly int LocalWidth;
+        public readonly int LocalHeight;
+        public readonly string BakedTerrainTextureRelPath;
+        public readonly int BakedTexWidth;
+        public readonly int BakedTexHeight;
+        public readonly int BakedOriginPx;
+        public readonly int BakedOriginPy;
+        public readonly List<MapPropData> Props;
+        public readonly List<MapStructureData> PreplacedStructures;
+
         private readonly GridCell[,] _cells;
 
         public GridMap(MapBundleData bundle)
@@ -137,8 +173,25 @@ namespace ReCnc.Core.Map
             Height = Math.Max(16, bundle.Height);
             DisplayName = bundle.DisplayName ?? bundle.MapId;
             Theater = bundle.Theater ?? "TEMPERATE";
-            _cells = new GridCell[Width, Height];
+            IsNativeIsometricGrid = bundle.IsNativeIsometricGrid;
+            MinRx = bundle.MinRx;
+            MaxRx = bundle.MaxRx;
+            MinRy = bundle.MinRy;
+            MaxRy = bundle.MaxRy;
+            FullMapWidth = bundle.FullMapWidth;
+            LocalLeft = bundle.LocalLeft;
+            LocalTop = bundle.LocalTop;
+            LocalWidth = bundle.LocalWidth > 0 ? bundle.LocalWidth : Width;
+            LocalHeight = bundle.LocalHeight > 0 ? bundle.LocalHeight : Height;
+            BakedTerrainTextureRelPath = bundle.BakedTerrainTextureRelPath ?? "";
+            BakedTexWidth = bundle.BakedTexWidth;
+            BakedTexHeight = bundle.BakedTexHeight;
+            BakedOriginPx = bundle.BakedOriginPx;
+            BakedOriginPy = bundle.BakedOriginPy;
+            Props = bundle.Props ?? new List<MapPropData>();
+            PreplacedStructures = bundle.PreplacedStructures ?? new List<MapStructureData>();
 
+            _cells = new GridCell[Width, Height];
             for (int y = 0; y < Height; y++)
             {
                 for (int x = 0; x < Width; x++)
@@ -166,8 +219,29 @@ namespace ReCnc.Core.Map
                         cell.Terrain = (TerrainKind)c.TerrainType;
                         cell.OreType = c.OreType;
                         cell.OreAmount = c.OreAmount;
+                        cell.HasBridge = c.HasBridge;
                     }
                 }
+            }
+
+            // Apply [Terrain] & wall props (Trees/Walls block movement & building; Streetlights block building only)
+            for (int i = 0; i < Props.Count; i++)
+            {
+                var p = Props[i];
+                if (!InBounds(p.X, p.Y)) continue;
+                var cell = _cells[p.X, p.Y];
+                cell.HasProp = true;
+                if (p.Kind != 2) // Kind 2 = Urban Streetlight/Traffic Light (vehicles can pass!)
+                {
+                    cell.HasBlockingProp = true;
+                }
+            }
+
+            // Mark pre-placed neutral/civilian structure footprints
+            for (int i = 0; i < PreplacedStructures.Count; i++)
+            {
+                var s = PreplacedStructures[i];
+                SetBuildingFootprint(new CellCoord(s.X, s.Y), s.FootprintX, s.FootprintY, 90000 + i);
             }
         }
 
@@ -191,11 +265,14 @@ namespace ReCnc.Core.Map
             return GetCell(coord.X, coord.Y);
         }
 
-        public float SampleWorldElevation(float gridX, float gridY)
+        public float SampleExactCellLevel(float gx, float gy)
         {
-            int cx = Math.Clamp((int)Math.Floor(gridX), 0, Width - 1);
-            int cy = Math.Clamp((int)Math.Floor(gridY), 0, Height - 1);
-            return _cells[cx, cy].HeightLevel * 0.45f;
+            int cx = Math.Clamp((int)Math.Floor(gx), 0, Width - 1);
+            int cy = Math.Clamp((int)Math.Floor(gy), 0, Height - 1);
+            var cell = _cells[cx, cy];
+            float fx = Math.Clamp(gx - cx, 0f, 1f);
+            float fy = Math.Clamp(gy - cy, 0f, 1f);
+            return Ra2RampGeometry.SampleCellHeight(cell.HeightLevel, cell.RampType, fx, fy);
         }
 
         public bool CanStep(int fromX, int fromY, int toX, int toY)
@@ -205,23 +282,36 @@ namespace ReCnc.Core.Map
             var dst = _cells[toX, toY];
             if (!dst.IsLandPassable) return false;
 
-            int dh = Math.Abs(dst.HeightLevel - src.HeightLevel);
-            // Real cliff rock & water are already blocked by dst.IsLandPassable above.
-            // On passable terrain, dh <= 1 is a gentle continuous slope, and dh == 2 is traversable via ramps!
-            if (dh > 2) return false;
-            if (dh == 2 && src.RampType == 0 && dst.RampType == 0) return false;
-
-            // Prevent diagonal corner cutting through buildings/cliffs
             int dx = toX - fromX;
             int dy = toY - fromY;
-            if (dx != 0 && dy != 0)
+
+            // Check shared-edge corner elevation continuity (exact RA2 20-ramp & bridge traversal!)
+            src.GetWorldCornerLevels(out int sTL, out int sTR, out int sBR, out int sBL, out _);
+            dst.GetWorldCornerLevels(out int dTL, out int dTR, out int dBR, out int dBL, out _);
+
+            int maxEdgeDiff;
+            if (dx == 0 && dy == 1) // North (+gy): src.(TL,TR) == dst.(BL,BR)
+                maxEdgeDiff = Math.Max(Math.Abs(sTL - dBL), Math.Abs(sTR - dBR));
+            else if (dx == 0 && dy == -1) // South (-gy): src.(BL,BR) == dst.(TL,TR)
+                maxEdgeDiff = Math.Max(Math.Abs(sBL - dTL), Math.Abs(sBR - dTR));
+            else if (dx == 1 && dy == 0) // East (+gx): src.(TR,BR) == dst.(TL,BL)
+                maxEdgeDiff = Math.Max(Math.Abs(sTR - dTL), Math.Abs(sBR - dBL));
+            else if (dx == -1 && dy == 0) // West (-gx): src.(TL,BL) == dst.(TR,BR)
+                maxEdgeDiff = Math.Max(Math.Abs(sTL - dTR), Math.Abs(sBL - dBR));
+            else // Diagonal: check shared vertex + orthogonal corner-cut prevention
             {
-                if (!_cells[fromX + dx, fromY].IsLandPassable || !_cells[fromX, fromY + dy].IsLandPassable)
-                {
+                if (!CanStep(fromX, fromY, fromX + dx, fromY) || !CanStep(fromX, fromY, fromX, fromY + dy))
                     return false;
-                }
+                if (dx == 1 && dy == 1) maxEdgeDiff = Math.Abs(sTR - dBL);
+                else if (dx == 1 && dy == -1) maxEdgeDiff = Math.Abs(sBR - dTL);
+                else if (dx == -1 && dy == 1) maxEdgeDiff = Math.Abs(sTL - dBR);
+                else maxEdgeDiff = Math.Abs(sBL - dTR);
             }
-            return true;
+
+            int allowedTolerance = (src.HasBridge || dst.HasBridge) ? 4
+                : (src.RampType != 0 || dst.RampType != 0) ? 1
+                : 0;
+            return maxEdgeDiff <= allowedTolerance;
         }
 
         public bool CanPlaceBuildingFootprint(CellCoord topLeft, int sizeX, int sizeY)
@@ -261,7 +351,7 @@ namespace ReCnc.Core.Map
             }
         }
 
-        public CellCoord FindNearestPassable(CellCoord origin, int maxRadius = 10)
+        public CellCoord FindNearestPassable(CellCoord origin, int maxRadius = 12)
         {
             var startCell = GetCell(origin);
             if (startCell != null && startCell.IsLandPassable) return origin;
@@ -306,7 +396,6 @@ namespace ReCnc.Core.Map
                         float dx = x - origin.X;
                         float dy = y - origin.Y;
                         float d2 = dx * dx + dy * dy;
-                        // Slightly prefer high-value gems when close
                         if (cell.OreType == 2) d2 *= 0.75f;
                         if (d2 < bestDistSq)
                         {
