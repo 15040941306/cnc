@@ -21,7 +21,19 @@ namespace ReCnc.Core.Simulation
         private float _aiDecisionTimer = 2.0f;
         private float _aiAttackWaveTimer = 65.0f;
         private float _oreRegrowTimer = 15.0f;
+        private uint _rngState = 0x9E3779B9u;
         public int WinnerFactionId = -1;
+
+        private int NextSimInt(int minInclusive, int maxExclusive)
+        {
+            if (maxExclusive <= minInclusive) return minInclusive;
+            uint x = _rngState;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            _rngState = x;
+            return minInclusive + (int)(x % (uint)(maxExclusive - minInclusive));
+        }
 
         public IReadOnlyList<FactionState> Factions { get { return _factions; } }
         public IReadOnlyList<EntityState> Entities { get { return _entities; } }
@@ -982,16 +994,50 @@ namespace ReCnc.Core.Simulation
         {
             _oreRegrowTimer -= dt;
             if (_oreRegrowTimer > 0f) return;
-            _oreRegrowTimer = 18f;
+            _oreRegrowTimer = 10f;
 
+            // 1. Existing Gold Ore (Riparius, OreType==1) slowly matures; Gems (Cruentus, OreType==2) do not regrow per RA2 rules!
             for (int y = 1; y < Map.Height - 1; y++)
             {
                 for (int x = 1; x < Map.Width - 1; x++)
                 {
                     var cell = Map.GetCell(x, y);
-                    if (cell.OreAmount > 0 && cell.OreAmount < 12)
+                    if (cell.OreType == 1 && cell.OreAmount > 0 && cell.OreAmount < 12 && NextSimInt(0, 4) == 0)
                     {
                         cell.OreAmount++;
+                    }
+                }
+            }
+
+            // 2. Ore Spawner Drills (TIBTRE01..03, Prop.Kind == 1) actively pump & spread new Gold Ore in a 3-cell radius!
+            if (Map.Props != null)
+            {
+                for (int i = 0; i < Map.Props.Count; i++)
+                {
+                    var prop = Map.Props[i];
+                    if (prop.Kind != 1) continue;
+
+                    for (int attempt = 0; attempt < 3; attempt++)
+                    {
+                        int dx = NextSimInt(-3, 4);
+                        int dy = NextSimInt(-3, 4);
+                        if (dx == 0 && dy == 0) continue;
+
+                        var target = Map.GetCell(prop.X + dx, prop.Y + dy);
+                        if (target == null || !target.IsLandPassable || target.HasBridge) continue;
+                        if (target.Terrain != TerrainKind.Clear && target.Terrain != TerrainKind.Rough) continue;
+
+                        if (target.OreAmount == 0)
+                        {
+                            target.OreType = 1;
+                            target.OreAmount = 3;
+                            break;
+                        }
+                        if (target.OreType == 1 && target.OreAmount < 12)
+                        {
+                            target.OreAmount = Math.Min(12, target.OreAmount + 2);
+                            break;
+                        }
                     }
                 }
             }

@@ -36,22 +36,28 @@ namespace ReCnc.Unity.World
     {
         private static readonly Dictionary<string, Texture2D> _proceduralTexCache = new Dictionary<string, Texture2D>();
 
-        private readonly Dictionary<CellCoord, GameObject> _oreClusters = new Dictionary<CellCoord, GameObject>();
-        private Material _goldOreMat;
-        private Material _gemOreMat;
+        private Mesh _goldOreMesh;
+        private Mesh _gemOreMesh;
+        private byte[] _cachedOreAmounts;
         private Texture2D _loadedBakedMapTex;
+        private Texture2D _goldAtlasTex;
+        private Texture2D _gemAtlasTex;
+        private Texture2D _drillAtlasTex;
 
         private void OnDestroy()
         {
-            if (_loadedBakedMapTex != null)
-            {
-                Destroy(_loadedBakedMapTex);
-                _loadedBakedMapTex = null;
-            }
+            if (_loadedBakedMapTex != null) { Destroy(_loadedBakedMapTex); _loadedBakedMapTex = null; }
+            if (_goldAtlasTex != null) { Destroy(_goldAtlasTex); _goldAtlasTex = null; }
+            if (_gemAtlasTex != null) { Destroy(_gemAtlasTex); _gemAtlasTex = null; }
+            if (_drillAtlasTex != null) { Destroy(_drillAtlasTex); _drillAtlasTex = null; }
+            if (_goldOreMesh != null) { Destroy(_goldOreMesh); _goldOreMesh = null; }
+            if (_gemOreMesh != null) { Destroy(_gemOreMesh); _gemOreMesh = null; }
         }
 
         public void BuildTerrain(GridMap map)
         {
+            InitOreAndDrillMaterials();
+
             if (map.IsNativeIsometricGrid)
             {
                 BuildAuthenticIsometric3DTerrain(map);
@@ -61,8 +67,6 @@ namespace ReCnc.Unity.World
                 BuildFallbackProceduralTerrain(map);
             }
 
-            _goldOreMat = CreateLitMaterial(new Color(0.96f, 0.76f, 0.14f, 1f), 0.78f);
-            _gemOreMat = CreateLitMaterial(new Color(0.88f, 0.16f, 0.94f, 1f), 0.90f);
             SyncOreVisuals(map);
         }
 
@@ -275,7 +279,7 @@ namespace ReCnc.Unity.World
                 : new Color(0.18f, 0.42f, 0.16f);
             Material trunkMat = CreateLitMaterial(new Color(0.36f, 0.24f, 0.14f), 0.15f);
             Material leafMat = CreateLitMaterial(foliageCol, 0.22f);
-            Material oreTreeMat = CreateLitMaterial(new Color(0.92f, 0.62f, 0.14f), 0.65f);
+            Material drillMat = CreateAnimatedDrillMaterial();
             Material lampMat = CreateLitMaterial(new Color(0.55f, 0.58f, 0.62f), 0.55f);
             Material wallMat = CreateLitMaterial(new Color(0.58f, 0.56f, 0.52f), 0.25f);
             Material civWallMat = CreateLitMaterial(new Color(0.72f, 0.69f, 0.64f), 0.30f);
@@ -286,7 +290,18 @@ namespace ReCnc.Unity.World
                 var p = map.Props[i];
                 Vector3 pos = WorldCoords.CellToWorld(map, p.X, p.Y);
 
-                if (p.Kind == 2) // Urban Streetlight / Traffic Light
+                if (p.Kind == 1 && drillMat != null) // Authentic RA2 11-Frame Animated Ore Spawner Drill (TIBTRE01..03)!
+                {
+                    var drillGo = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                    drillGo.name = p.TypeId;
+                    Destroy(drillGo.GetComponent<Collider>());
+                    drillGo.transform.SetParent(propsRoot.transform, false);
+                    drillGo.transform.position = pos + new Vector3(-0.15f, 0.95f, 0.15f);
+                    drillGo.transform.rotation = Quaternion.Euler(26f, -45f, 0f);
+                    drillGo.transform.localScale = new Vector3(3.8f, 2.5f, 1f);
+                    drillGo.GetComponent<MeshRenderer>().sharedMaterial = drillMat;
+                }
+                else if (p.Kind == 2) // Urban Streetlight / Traffic Light
                 {
                     var pole = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
                     Destroy(pole.GetComponent<Collider>());
@@ -323,7 +338,7 @@ namespace ReCnc.Unity.World
                     float hVar = 1.4f + ((p.X * 31 + p.Y * 17) % 5) * 0.16f;
                     canopy.transform.localPosition = new Vector3(0f, 1.55f, 0f);
                     canopy.transform.localScale = new Vector3(1.35f, hVar, 1.35f);
-                    canopy.GetComponent<MeshRenderer>().sharedMaterial = p.Kind == 1 ? oreTreeMat : leafMat;
+                    canopy.GetComponent<MeshRenderer>().sharedMaterial = leafMat;
                 }
             }
 
@@ -463,54 +478,164 @@ namespace ReCnc.Unity.World
             tris.Add(idx); tris.Add(idx + 2); tris.Add(idx + 3);
         }
 
+        private void InitOreAndDrillMaterials()
+        {
+            string texDir = Path.Combine(Application.streamingAssetsPath, "Ra2Converted", "terrain_tex");
+            _goldAtlasTex  = LoadStreamingPng(Path.Combine(texDir, "ore_gold_atlas.png"));
+            _gemAtlasTex   = LoadStreamingPng(Path.Combine(texDir, "ore_gem_atlas.png"));
+            _drillAtlasTex = LoadStreamingPng(Path.Combine(texDir, "ore_drill_atlas.png"));
+
+            Shader oreShader = Shader.Find("ReCnc/Ra2OreOverlay") ?? Shader.Find("Sprites/Default");
+
+            var goldGo = new GameObject("GoldOreFieldMesh");
+            goldGo.transform.SetParent(transform, false);
+            _goldOreMesh = new Mesh { name = "GoldOreMesh", indexFormat = IndexFormat.UInt32 };
+            goldGo.AddComponent<MeshFilter>().sharedMesh = _goldOreMesh;
+            var goldMat = new Material(oreShader);
+            if (_goldAtlasTex != null) goldMat.mainTexture = _goldAtlasTex;
+            goldGo.AddComponent<MeshRenderer>().sharedMaterial = goldMat;
+
+            var gemGo = new GameObject("GemFieldMesh");
+            gemGo.transform.SetParent(transform, false);
+            _gemOreMesh = new Mesh { name = "GemOreMesh", indexFormat = IndexFormat.UInt32 };
+            gemGo.AddComponent<MeshFilter>().sharedMesh = _gemOreMesh;
+            var gemMat = new Material(oreShader);
+            if (_gemAtlasTex != null) gemMat.mainTexture = _gemAtlasTex;
+            if (gemMat.HasProperty("_SparkleStrength")) gemMat.SetFloat("_SparkleStrength", 0.55f);
+            gemGo.AddComponent<MeshRenderer>().sharedMaterial = gemMat;
+        }
+
+        private Material CreateAnimatedDrillMaterial()
+        {
+            if (_drillAtlasTex == null) return null;
+            Shader oreShader = Shader.Find("ReCnc/Ra2OreOverlay") ?? Shader.Find("Sprites/Default");
+            var mat = new Material(oreShader) { mainTexture = _drillAtlasTex };
+            if (mat.HasProperty("_TotalFrames")) mat.SetFloat("_TotalFrames", 11f);
+            if (mat.HasProperty("_AnimFps")) mat.SetFloat("_AnimFps", 5.5f);
+            return mat;
+        }
+
+        private static Texture2D LoadStreamingPng(string path)
+        {
+            if (!File.Exists(path)) return null;
+            byte[] bytes = File.ReadAllBytes(path);
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            tex.LoadImage(bytes);
+            return tex;
+        }
+
         public void SyncOreVisuals(GridMap map)
         {
+            int total = map.Width * map.Height;
+            bool changed = _cachedOreAmounts == null || _cachedOreAmounts.Length != total;
+            if (_cachedOreAmounts == null || _cachedOreAmounts.Length != total)
+            {
+                _cachedOreAmounts = new byte[total];
+            }
+
+            for (int y = 0; y < map.Height && !changed; y++)
+            {
+                int row = y * map.Width;
+                for (int x = 0; x < map.Width; x++)
+                {
+                    var c = map.GetCell(x, y);
+                    byte packed = (byte)((c.OreType << 4) | (c.OreAmount & 0x0F));
+                    if (_cachedOreAmounts[row + x] != packed)
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed) return;
+
+            var gVerts = new List<Vector3>(1024);
+            var gNorms = new List<Vector3>(1024);
+            var gUvs   = new List<Vector2>(1024);
+            var gTris  = new List<int>(2048);
+
+            var mVerts = new List<Vector3>(512);
+            var mNorms = new List<Vector3>(512);
+            var mUvs   = new List<Vector2>(512);
+            var mTris  = new List<int>(1024);
+
+            const float colW = 1f / 12f;
+            const float rowH = 0.25f;
+
             for (int y = 0; y < map.Height; y++)
             {
+                int row = y * map.Width;
                 for (int x = 0; x < map.Width; x++)
                 {
                     var cell = map.GetCell(x, y);
-                    var key = new CellCoord(x, y);
-                    GameObject existing;
-                    bool hasExisting = _oreClusters.TryGetValue(key, out existing);
+                    byte packed = (byte)((cell.OreType << 4) | (cell.OreAmount & 0x0F));
+                    _cachedOreAmounts[row + x] = packed;
 
-                    if (cell.OreAmount <= 0)
-                    {
-                        if (hasExisting && existing != null) existing.SetActive(false);
-                        continue;
-                    }
+                    if (cell.OreAmount <= 0) continue;
 
-                    if (!hasExisting || existing == null)
-                    {
-                        existing = CreateOreCluster(cell.OreType == 2 ? _gemOreMat : _goldOreMat, x, y);
-                        existing.transform.SetParent(transform, false);
-                        _oreClusters[key] = existing;
-                    }
+                    bool isGem = cell.OreType == 2;
+                    var verts = isGem ? mVerts : gVerts;
+                    var norms = isGem ? mNorms : gNorms;
+                    var uvs   = isGem ? mUvs   : gUvs;
+                    var tris  = isGem ? mTris  : gTris;
 
-                    existing.SetActive(true);
-                    float scale = 0.55f + (cell.OreAmount / 12f) * 0.55f;
-                    existing.transform.position = WorldCoords.CellToWorld(map, x, y);
-                    existing.transform.localScale = new Vector3(scale, scale, scale);
+                    int stage = Mathf.Clamp(cell.OreAmount - 1, 0, 11);
+                    int variant = ((x * 37 + y * 73) & 0x7FFFFFFF) % 4;
+                    float u0 = stage * colW;
+                    float v0 = (3 - variant) * rowH;
+
+                    // 4-triangle 3D raised pyramid hugging the exact sloped terrain cell + matching RA2 60x60 sprite diamond!
+                    const float pad = 0.14f;
+                    float hBL = map.SampleExactCellLevel(x - pad, y - pad) * WorldCoords.HeightStep + 0.03f;
+                    float hTL = map.SampleExactCellLevel(x - pad * 1.6f, y + 1f + pad * 1.6f) * WorldCoords.HeightStep + 0.03f;
+                    float hTR = map.SampleExactCellLevel(x + 1f + pad, y + 1f + pad) * WorldCoords.HeightStep + 0.03f;
+                    float hBR = map.SampleExactCellLevel(x + 1f + pad, y - pad) * WorldCoords.HeightStep + 0.03f;
+                    float moundLift = 0.05f + 0.18f * (cell.OreAmount / 12f);
+                    float hC  = map.SampleExactCellLevel(x + 0.5f, y + 0.5f) * WorldCoords.HeightStep + moundLift;
+
+                    Vector3 pBL = new Vector3((x - pad) * WorldCoords.CellSize, hBL, (y - pad) * WorldCoords.CellSize);
+                    Vector3 pTL = new Vector3((x - pad * 1.6f) * WorldCoords.CellSize, hTL, (y + 1f + pad * 1.6f) * WorldCoords.CellSize);
+                    Vector3 pTR = new Vector3((x + 1f + pad) * WorldCoords.CellSize, hTR, (y + 1f + pad) * WorldCoords.CellSize);
+                    Vector3 pBR = new Vector3((x + 1f + pad) * WorldCoords.CellSize, hBR, (y - pad) * WorldCoords.CellSize);
+                    Vector3 pC  = new Vector3((x + 0.5f) * WorldCoords.CellSize, hC, (y + 0.5f) * WorldCoords.CellSize);
+
+                    int bi = verts.Count;
+                    verts.Add(pBL); verts.Add(pTL); verts.Add(pTR); verts.Add(pBR); verts.Add(pC);
+                    for (int n = 0; n < 5; n++) norms.Add(Vector3.up);
+
+                    // Exact diamond UV inside [u0..u0+colW] x [v0..v0+rowH]
+                    uvs.Add(new Vector2(u0 + 0.02f * colW, v0 + 0.26f * rowH)); // BL (left of diamond)
+                    uvs.Add(new Vector2(u0 + 0.50f * colW, v0 + 0.62f * rowH)); // TL (top of diamond + nugget crest)
+                    uvs.Add(new Vector2(u0 + 0.98f * colW, v0 + 0.26f * rowH)); // TR (right of diamond)
+                    uvs.Add(new Vector2(u0 + 0.50f * colW, v0 + 0.01f * rowH)); // BR (bottom of diamond)
+                    uvs.Add(new Vector2(u0 + 0.50f * colW, v0 + 0.28f * rowH)); // Center apex
+
+                    tris.Add(bi + 0); tris.Add(bi + 1); tris.Add(bi + 4);
+                    tris.Add(bi + 1); tris.Add(bi + 2); tris.Add(bi + 4);
+                    tris.Add(bi + 2); tris.Add(bi + 3); tris.Add(bi + 4);
+                    tris.Add(bi + 3); tris.Add(bi + 0); tris.Add(bi + 4);
                 }
             }
+
+            UpdateDynamicOreMesh(_goldOreMesh, gVerts, gNorms, gUvs, gTris);
+            UpdateDynamicOreMesh(_gemOreMesh, mVerts, mNorms, mUvs, mTris);
         }
 
-        private static GameObject CreateOreCluster(Material mat, int seedX, int seedY)
+        private static void UpdateDynamicOreMesh(Mesh mesh, List<Vector3> verts, List<Vector3> norms, List<Vector2> uvs, List<int> tris)
         {
-            var root = new GameObject("Ore_" + seedX + "_" + seedY);
-            for (int i = 0; i < 4; i++)
-            {
-                var nugget = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Destroy(nugget.GetComponent<Collider>());
-                nugget.transform.SetParent(root.transform, false);
-                float angle = (seedX * 73 + seedY * 37 + i * 92) % 360;
-                float r = 0.18f + (i % 2) * 0.24f;
-                nugget.transform.localPosition = new Vector3(Mathf.Cos(angle * Mathf.Deg2Rad) * r, 0.08f, Mathf.Sin(angle * Mathf.Deg2Rad) * r);
-                nugget.transform.localRotation = Quaternion.Euler(15f, angle, 25f);
-                nugget.transform.localScale = new Vector3(0.38f, 0.22f, 0.32f);
-                nugget.GetComponent<MeshRenderer>().sharedMaterial = mat;
-            }
-            return root;
+            if (mesh == null) return;
+            mesh.Clear();
+            if (verts.Count == 0) return;
+            mesh.SetVertices(verts);
+            mesh.SetNormals(norms);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateBounds();
         }
 
         private static Material CreateSplatTerrainMaterial(string theater)

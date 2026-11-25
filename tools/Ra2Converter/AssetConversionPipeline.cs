@@ -104,8 +104,12 @@ public sealed class AssetConversionPipeline
         }
         Console.WriteLine($"[5/6] 转换 2D 图像 (.shp -> .png): {manifest.Cameos.Count} 个建造图标, {manifest.Sprites.Count} 张建筑/步兵立绘");
 
-        // 6. Convert Audio (.bag + .idx -> .wav) & Skirmish Maps
+        // 6. Convert Audio (.bag + .idx -> .wav), Ore/Drill Atlases & Skirmish Maps
         ConvertAudioClips(manifest);
+        if (unitPal != null && isoPal != null)
+        {
+            ExportOreAndDrillAtlases(unitPal, isoPal);
+        }
         ExportSkirmishMaps(strings, rulesIni, artIni, manifest, jsonOpts);
         Console.WriteLine($"[6/6] 转换音频与地图: {manifest.Audios.Count} 条 WAV 语音/音效, {manifest.Maps.Count} 张 3D 地图数据");
 
@@ -487,6 +491,97 @@ public sealed class AssetConversionPipeline
                         SampleRate = sr
                     });
                     break;
+                }
+            }
+        }
+    }
+
+    private void ExportOreAndDrillAtlases(PalPalette unitPal, PalPalette isoPal)
+    {
+        string outDir = Path.Combine(_streamingOutDir, "terrain_tex");
+        Directory.CreateDirectory(outDir);
+
+        // 1. Gold Ore Atlas (12 stages x 4 variations = 720 x 240, 60x60 per cell)
+        Export12StageMineralAtlas(
+            new[] { "tib01.tem", "tib02.tem", "tib03.tem", "tib04.tem" },
+            unitPal,
+            new Rgba32(252, 212, 38, 255),
+            Path.Combine(outDir, "ore_gold_atlas.png"));
+
+        // 2. Colorful Gems Atlas (12 stages x 4 variations = 720 x 240, 60x60 per cell)
+        Export12StageMineralAtlas(
+            new[] { "gem01.tem", "gem02.tem", "gem03.tem", "gem04.tem" },
+            unitPal,
+            null,
+            Path.Combine(outDir, "ore_gem_atlas.png"));
+
+        // 3. Animated Ore Spawner Drill Atlas (tibtre01.tem: 11 frames x 1 row = 924 x 56)
+        byte[]? drillBytes = _vfs.TryReadFile("tibtre01.tem") ?? _vfs.TryReadFile("tibtre01.sno");
+        if (drillBytes != null)
+        {
+            var drillShp = ShpTsDocument.Parse(drillBytes);
+            int fw = drillShp.Width, fh = drillShp.Height;
+            int animFrames = Math.Min(11, drillShp.Frames.Count / 2);
+            if (fw > 0 && fh > 0 && animFrames > 0)
+            {
+                int atlasW = fw * animFrames;
+                var atlas = new Rgba32[atlasW * fh];
+                for (int f = 0; f < animFrames; f++)
+                {
+                    var colPx = drillShp.RenderFrameToCanvas(f, isoPal, null, false, out _, out _);
+                    var shdPx = (f + animFrames < drillShp.Frames.Count)
+                        ? drillShp.RenderFrameToCanvas(f + animFrames, isoPal, null, false, out _, out _)
+                        : null;
+                    BlitFrameWithShadow(colPx, shdPx, fw, fh, f * fw, 0, atlas, atlasW);
+                }
+                PngWriter.SaveRgba32(Path.Combine(outDir, "ore_drill_atlas.png"), atlasW, fh, atlas);
+            }
+        }
+    }
+
+    private void Export12StageMineralAtlas(string[] shpNames, PalPalette pal, Rgba32? remapColor, string outPngPath)
+    {
+        const int cellW = 60, cellH = 60, stages = 12;
+        int rows = shpNames.Length;
+        int atlasW = cellW * stages;
+        int atlasH = cellH * rows;
+        var atlas = new Rgba32[atlasW * atlasH];
+
+        for (int r = 0; r < rows; r++)
+        {
+            byte[]? bytes = _vfs.TryReadFile(shpNames[r]) ?? _vfs.TryReadFile(shpNames[0]);
+            if (bytes == null) continue;
+            var shp = ShpTsDocument.Parse(bytes);
+            if (shp.Width != cellW || shp.Height != cellH) continue;
+
+            for (int s = 0; s < stages && s < shp.Frames.Count; s++)
+            {
+                var colPx = shp.RenderFrameToCanvas(s, pal, remapColor, false, out _, out _);
+                var shdPx = (s + 12 < shp.Frames.Count)
+                    ? shp.RenderFrameToCanvas(s + 12, pal, null, false, out _, out _)
+                    : null;
+                BlitFrameWithShadow(colPx, shdPx, cellW, cellH, s * cellW, r * cellH, atlas, atlasW);
+            }
+        }
+
+        PngWriter.SaveRgba32(outPngPath, atlasW, atlasH, atlas);
+    }
+
+    private static void BlitFrameWithShadow(Rgba32[] colPx, Rgba32[]? shdPx, int fw, int fh, int dstX, int dstY, Rgba32[] atlas, int atlasW)
+    {
+        for (int y = 0; y < fh; y++)
+        {
+            int srcRow = y * fw;
+            int dstRow = (dstY + y) * atlasW + dstX;
+            for (int x = 0; x < fw; x++)
+            {
+                if (colPx[srcRow + x].A > 0)
+                {
+                    atlas[dstRow + x] = colPx[srcRow + x];
+                }
+                else if (shdPx != null && shdPx[srcRow + x].A > 0)
+                {
+                    atlas[dstRow + x] = new Rgba32(0, 0, 0, 108);
                 }
             }
         }
